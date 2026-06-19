@@ -1,5 +1,9 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
+const LAST_BACKUP_KEY = "rensheng-haihai.last-backup.v1";
+const BACKUP_FORMAT = "rensheng-haihai-encrypted-backup";
+const BACKUP_AAD = "rensheng-haihai-backup:v1";
+const BACKUP_ITERATIONS = 310000;
 const SAMPLE_TEXTS = new Set([
   "六点自然醒，没赖床。煮了咖啡，看着窗外的雨，想起十年前在厦门看海的那个清晨。",
   "和妈妈通了电话，她说膝盖最近又疼了，但不肯去医院。我有点担心，又不知道怎么劝她。",
@@ -25,6 +29,7 @@ const icons = {
   search: `<svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
   calendar: `<svg viewBox="0 0 24 24" fill="none"><rect x="3" y="5" width="18" height="16" rx="3" stroke="currentColor" stroke-width="2"/><path d="M3 9h18M8 3v4M16 3v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
   mic: `<svg viewBox="0 0 24 24" fill="none"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M6 11a6 6 0 0012 0M12 17v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`,
+  shield: `<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.8-2.8 8.2-7 10-4.2-1.8-7-5.2-7-10V6l7-3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="m9.2 12 1.8 1.8 3.9-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
   more: `<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="19" cy="12" r="1.8" fill="currentColor"/></svg>`,
   info: `<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 11v6M12 7.5v.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`
 };
@@ -41,6 +46,9 @@ let state = {
   editor: false,
   installHelp: false,
   deleteConfirm: false,
+  protectionMode: null,
+  pendingRestoreFile: null,
+  restoreStrategy: "merge",
   recording: false,
   recognition: null,
   memories: loadMemories()
@@ -176,7 +184,7 @@ function renderStream() {
       <div class="header-actions">
         <div class="sync-badge"><i class="sync-dot"></i>本地已同步 · 今日 ${today} 条记忆</div>
         <button class="soft-button" data-go="lenses">透镜</button>
-        <button class="soft-button" data-install aria-label="安装说明">${icons.info}</button>
+        <button class="soft-button protect-button ${backupDue() ? "due" : ""}" data-protect aria-label="记忆保护">${icons.shield}</button>
       </div>
     </header>
     <div class="stream page-pad">
@@ -249,7 +257,7 @@ function renderLenses() {
       <p class="eyebrow">三种透镜 · LENSES</p>
       <h1 class="display-title">系统怎么看你的记忆</h1>
       ${cards}
-      <section class="md-card"><div class="md-head"><span class="md-mark">md</span>本地记录 · 离线也在写</div><pre class="md-preview">${escapeHTML(preview)}</pre><p>数据保存在这台设备的浏览器中，可随时导出成 markdown。</p><button class="action-button" data-export style="margin-top:12px;width:100%">导出全部 Markdown</button></section>
+      <section class="md-card"><div class="md-head"><span class="md-mark">md</span>本地记录 · 离线也在写</div><pre class="md-preview">${escapeHTML(preview)}</pre><p>Markdown 方便阅读；加密备份才能完整恢复全部记忆与分析。</p><div class="md-actions"><button class="action-button" data-protect>加密备份</button><button class="action-button" data-export>导出 Markdown</button></div></section>
     </div>
   </section>`;
 }
@@ -300,6 +308,7 @@ function renderModal() {
   if (state.editor) return renderEditor();
   if (state.installHelp) return renderInstallHelp();
   if (state.deleteConfirm) return renderDeleteConfirm();
+  if (state.protectionMode) return renderProtection();
   return "";
 }
 
@@ -344,11 +353,73 @@ function renderDeleteConfirm() {
   </section></div>`;
 }
 
+function renderProtection() {
+  if (state.protectionMode === "create") return renderCreateBackup();
+  if (state.protectionMode === "restore") return renderRestoreBackup();
+  const lastBackup = localStorage.getItem(LAST_BACKUP_KEY);
+  const status = lastBackup
+    ? `上次备份：${formatBackupDate(lastBackup)}`
+    : state.memories.length ? "还没有创建过备份" : "暂无记忆需要备份";
+  return `<div class="modal" data-overlay><section class="modal-panel install-sheet protection-sheet">
+    <button class="icon-button" data-close style="margin-left:auto">✕</button>
+    <div class="protection-symbol">${icons.shield}</div>
+    <h2>记忆保护</h2>
+    <p>备份在手机本地加密完成。密码和记忆都不会上传。</p>
+    <div class="backup-status ${backupDue() ? "due" : ""}"><span>${backupDue() ? "!" : "✓"}</span><div><strong>${status}</strong><small>${backupDue() ? "建议现在备份一次" : "建议每周备份一次"}</small></div></div>
+    <div class="protection-actions">
+      <button class="protection-action primary" data-backup-create ${state.memories.length ? "" : "disabled"}><span>↓</span><div><strong>创建加密备份</strong><small>保存到“文件”或 iCloud Drive</small></div></button>
+      <label class="protection-action"><span>↑</span><div><strong>恢复加密备份</strong><small>从 .haihai 文件恢复</small></div><input id="restore-file" type="file" accept=".haihai,application/json" hidden /></label>
+    </div>
+    <button class="plain-link" data-install>如何安装到主屏幕</button>
+  </section></div>`;
+}
+
+function renderCreateBackup() {
+  return `<div class="modal"><section class="modal-panel install-sheet protection-sheet">
+    <button class="icon-button" data-protect-home aria-label="返回">${icons.back}</button>
+    <h2>创建加密备份</h2>
+    <p>设置一个至少 8 位的备份密码。以后恢复时必须使用同一个密码。</p>
+    <label class="field-label">备份密码<input id="backup-password" class="secure-field" type="password" minlength="8" autocomplete="new-password" placeholder="至少 8 位" /></label>
+    <label class="field-label">再次输入<input id="backup-confirm" class="secure-field" type="password" minlength="8" autocomplete="new-password" placeholder="再次输入密码" /></label>
+    <div class="privacy-box"><strong>请记住这个密码</strong><span>为了隐私，App 不保存密码，也无法帮你找回。</span></div>
+    <button class="wide-primary" data-create-encrypted>加密并保存</button>
+  </section></div>`;
+}
+
+function renderRestoreBackup() {
+  return `<div class="modal"><section class="modal-panel install-sheet protection-sheet">
+    <button class="icon-button" data-protect-home aria-label="返回">${icons.back}</button>
+    <h2>恢复加密备份</h2>
+    <p class="file-name">已选择：${escapeHTML(state.pendingRestoreFile?.name || "备份文件")}</p>
+    <label class="field-label">备份密码<input id="restore-password" class="secure-field" type="password" autocomplete="current-password" placeholder="输入创建备份时的密码" /></label>
+    <div class="restore-options">
+      <button class="restore-option ${state.restoreStrategy === "merge" ? "active" : ""}" data-restore-strategy="merge"><strong>合并恢复 · 推荐</strong><span>保留当前记忆，只补回缺少的内容</span></button>
+      <button class="restore-option danger ${state.restoreStrategy === "replace" ? "active" : ""}" data-restore-strategy="replace"><strong>替换全部</strong><span>用备份内容覆盖这台手机的全部记忆</span></button>
+    </div>
+    <button class="wide-primary" data-restore-encrypted>解密并恢复</button>
+  </section></div>`;
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-go]").forEach(el => el.addEventListener("click", () => go(el.dataset.go)));
   document.querySelectorAll("[data-memory]").forEach(el => el.addEventListener("click", () => openMemory(el.dataset.memory)));
   document.querySelector("[data-compose]")?.addEventListener("click", () => { state.composer = true; render(); setTimeout(() => document.querySelector("#composer-text")?.focus(), 80); });
   document.querySelector("[data-install]")?.addEventListener("click", () => { state.installHelp = true; render(); });
+  document.querySelectorAll("[data-protect]").forEach(el => el.addEventListener("click", () => { state.protectionMode = "home"; render(); }));
+  document.querySelector("[data-protect-home]")?.addEventListener("click", () => { state.protectionMode = "home"; state.pendingRestoreFile = null; render(); });
+  document.querySelector("[data-backup-create]")?.addEventListener("click", () => { state.protectionMode = "create"; render(); setTimeout(() => document.querySelector("#backup-password")?.focus(), 80); });
+  document.querySelector("#restore-file")?.addEventListener("change", event => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    state.pendingRestoreFile = file;
+    state.restoreStrategy = "merge";
+    state.protectionMode = "restore";
+    render();
+    setTimeout(() => document.querySelector("#restore-password")?.focus(), 80);
+  });
+  document.querySelectorAll("[data-restore-strategy]").forEach(el => el.addEventListener("click", () => { state.restoreStrategy = el.dataset.restoreStrategy; render(); }));
+  document.querySelector("[data-create-encrypted]")?.addEventListener("click", createEncryptedBackup);
+  document.querySelector("[data-restore-encrypted]")?.addEventListener("click", restoreEncryptedBackup);
   document.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", closeModal));
   document.querySelector("[data-overlay]")?.addEventListener("click", e => { if (e.target === e.currentTarget) closeModal(); });
 
@@ -377,6 +448,8 @@ function closeModal() {
   state.editor = false;
   state.installHelp = false;
   state.deleteConfirm = false;
+  state.protectionMode = null;
+  state.pendingRestoreFile = null;
   render();
 }
 
@@ -492,6 +565,200 @@ function exportMarkdown() {
   a.href = url; a.download = `人生海海-${isoDay(new Date())}.md`; a.click();
   URL.revokeObjectURL(url);
   notify("Markdown 已导出");
+}
+
+async function createEncryptedBackup() {
+  const password = document.querySelector("#backup-password")?.value || "";
+  const confirmPassword = document.querySelector("#backup-confirm")?.value || "";
+  if (password.length < 8) return notify("密码至少需要 8 位");
+  if (password !== confirmPassword) return notify("两次密码不一致");
+  if (!window.crypto?.subtle) return notify("当前浏览器不支持安全加密");
+
+  const button = document.querySelector("[data-create-encrypted]");
+  if (button) { button.disabled = true; button.textContent = "正在加密…"; }
+  try {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await deriveBackupKey(password, salt, ["encrypt"]);
+    const payload = new TextEncoder().encode(JSON.stringify({
+      format: "rensheng-haihai-data",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      memories: state.memories
+    }));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(BACKUP_AAD) },
+      key,
+      payload
+    );
+    const envelope = {
+      format: BACKUP_FORMAT,
+      version: 1,
+      createdAt: new Date().toISOString(),
+      kdf: { name: "PBKDF2", hash: "SHA-256", iterations: BACKUP_ITERATIONS, salt: bytesToBase64(salt) },
+      cipher: { name: "AES-GCM", iv: bytesToBase64(iv) },
+      ciphertext: bytesToBase64(new Uint8Array(encrypted))
+    };
+    const file = new File(
+      [JSON.stringify(envelope)],
+      `人生海海-加密备份-${isoDay(new Date())}.haihai`,
+      { type: "application/json" }
+    );
+    await saveBackupFile(file);
+    const now = new Date().toISOString();
+    localStorage.setItem(LAST_BACKUP_KEY, now);
+    state.protectionMode = "home";
+    render();
+    notify("加密备份已创建");
+  } catch (error) {
+    console.error(error);
+    notify("备份失败，请稍后重试");
+    if (button) { button.disabled = false; button.textContent = "加密并保存"; }
+  }
+}
+
+async function restoreEncryptedBackup() {
+  const password = document.querySelector("#restore-password")?.value || "";
+  const file = state.pendingRestoreFile;
+  if (!file) return notify("请重新选择备份文件");
+  if (!password) return notify("请输入备份密码");
+  if (!window.crypto?.subtle) return notify("当前浏览器不支持安全解密");
+
+  const button = document.querySelector("[data-restore-encrypted]");
+  if (button) { button.disabled = true; button.textContent = "正在恢复…"; }
+  try {
+    const envelope = JSON.parse(await file.text());
+    validateBackupEnvelope(envelope);
+    const salt = base64ToBytes(envelope.kdf.salt);
+    const iv = base64ToBytes(envelope.cipher.iv);
+    const key = await deriveBackupKey(password, salt, ["decrypt"], envelope.kdf.iterations);
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(BACKUP_AAD) },
+      key,
+      base64ToBytes(envelope.ciphertext)
+    );
+    const payload = JSON.parse(new TextDecoder().decode(plain));
+    if (payload?.format !== "rensheng-haihai-data" || payload?.version !== 1 || !Array.isArray(payload.memories)) {
+      throw new Error("invalid payload");
+    }
+    const restored = payload.memories.map(normalizeBackupMemory).filter(Boolean);
+    state.memories = state.restoreStrategy === "replace"
+      ? restored.sort(byNewest)
+      : mergeMemories(state.memories, restored);
+    saveMemories();
+    state.protectionMode = null;
+    state.pendingRestoreFile = null;
+    state.view = "stream";
+    render();
+    notify(`已恢复 ${restored.length} 条记忆`);
+  } catch (error) {
+    console.error(error);
+    notify("无法恢复：密码错误或文件已损坏");
+    if (button) { button.disabled = false; button.textContent = "解密并恢复"; }
+  }
+}
+
+async function deriveBackupKey(password, salt, usages, iterations = BACKUP_ITERATIONS) {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    usages
+  );
+}
+
+async function saveBackupFile(file) {
+  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ title: "人生海海加密备份", files: [file] });
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function validateBackupEnvelope(envelope) {
+  if (
+    envelope?.format !== BACKUP_FORMAT ||
+    envelope?.version !== 1 ||
+    envelope?.kdf?.name !== "PBKDF2" ||
+    envelope?.kdf?.hash !== "SHA-256" ||
+    !Number.isInteger(envelope?.kdf?.iterations) ||
+    envelope.kdf.iterations < 100000 ||
+    envelope?.cipher?.name !== "AES-GCM" ||
+    typeof envelope?.kdf?.salt !== "string" ||
+    typeof envelope?.cipher?.iv !== "string" ||
+    typeof envelope?.ciphertext !== "string"
+  ) throw new Error("invalid backup");
+}
+
+function normalizeBackupMemory(item) {
+  if (!item || typeof item.text !== "string" || !item.text.trim()) return null;
+  const kind = ["person", "event", "content"].includes(item.kind) ? item.kind : "content";
+  const createdAt = Number.isNaN(Date.parse(item.createdAt)) ? new Date().toISOString() : item.createdAt;
+  return {
+    id: typeof item.id === "string" && item.id ? item.id : (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
+    text: item.text.trim(),
+    createdAt,
+    source: item.source === "voice" ? "voice" : "text",
+    seconds: Number.isFinite(item.seconds) ? Math.max(0, Math.round(item.seconds)) : 0,
+    kind,
+    subject: typeof item.subject === "string" ? item.subject : null,
+    insight: typeof item.insight === "string" ? item.insight : "",
+    insightLabel: typeof item.insightLabel === "string" ? item.insightLabel : "",
+    warning: Boolean(item.warning),
+    lenses: Array.isArray(item.lenses) ? item.lenses.map(lens => ({
+      title: typeof lens?.title === "string" ? lens.title : "分析",
+      body: typeof lens?.body === "string" ? lens.body : "",
+      tone: ["person", "event", "content", "warn"].includes(lens?.tone) ? lens.tone : "content",
+      badge: typeof lens?.badge === "string" ? lens.badge : null
+    })) : []
+  };
+}
+
+function mergeMemories(current, restored) {
+  const ids = new Set(current.map(item => item.id));
+  const signatures = new Set(current.map(item => `${item.createdAt}\n${item.text}`));
+  const additions = restored.filter(item => !ids.has(item.id) && !signatures.has(`${item.createdAt}\n${item.text}`));
+  return [...current, ...additions].sort(byNewest);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  bytes.forEach(byte => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, char => char.charCodeAt(0));
+}
+
+function backupDue() {
+  if (!state.memories.length) return false;
+  const last = localStorage.getItem(LAST_BACKUP_KEY);
+  return !last || Number.isNaN(Date.parse(last)) || (Date.now() - new Date(last).getTime()) > 7 * 86400000;
+}
+
+function formatBackupDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未知";
+  return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 
 function computeStats() {

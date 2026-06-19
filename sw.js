@@ -1,4 +1,4 @@
-const CACHE = "rensheng-haihai-v4";
+const CACHE = "rensheng-haihai-v5";
 const ASSETS = [
   "./",
   "./index.html",
