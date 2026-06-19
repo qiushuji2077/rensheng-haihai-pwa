@@ -726,3 +726,12 @@ button { cursor: pointer; }
   .screen { min-height: calc(100dvh - 56px); }
   .dock { bottom: 28px; border-radius: 0 0 38px 38px; }
 }
+
+/* 详情页 · 手动改分类 */
+.classifier { margin: 18px 0; padding: 14px 16px; background: var(--card, #fcfaf4); border: 1px solid rgba(43,39,34,.07); border-radius: 16px; }
+.classifier-head { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--faint, #8a8275); margin-bottom: 10px; }
+.locked-pill { font-size: 11px; color: var(--teal, #2e6e73); background: rgba(46,110,115,.1); padding: 2px 8px; border-radius: 999px; }
+.kind-chips { padding-bottom: 10px; }
+.subject-input { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid rgba(43,39,34,.12); border-radius: 10px; font-size: 14px; background: #fff; color: var(--ink, #2b2722); margin-bottom: 8px; }
+.subject-input:focus { outline: none; border-color: var(--teal, #2e6e73); }
+.classifier-note { font-size: 12px; color: var(--ghost, #a89f90); margin: 0; line-height: 1.5; }

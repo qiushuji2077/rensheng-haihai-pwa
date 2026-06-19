@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.3.2";
+const APP_VERSION = "1.4.0";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -237,6 +237,7 @@ function memory(text, createdAt = new Date().toISOString()) {
     source: "text",
     seconds: 0,
     ...archive,
+    userKind: false,
     urgentSignal: detectUrgentSignal(text),
     insight: "",
     insightLabel: "",
@@ -458,7 +459,12 @@ function renderDetail() {
       <div class="detail-meta">${tag(m)}<span class="detail-date">${formatFullDate(m.createdAt)}</span></div>
       <p class="detail-text">${escapeHTML(m.text)}</p>
       <div class="source-line">${m.source === "voice" ? "🎙" : "✎"} ${m.source === "voice" ? `语音 ${m.seconds || 0} 秒 · 本地转写` : "手动输入 · 本地记录"}</div>
-      <div class="archive-note"><span>归档</span><div><strong>${escapeHTML(tagText(m))}${m.topic ? ` · ${escapeHTML(m.topic)}` : ""}</strong><p>单条记忆只做轻量归档；关键发现会在“总结与方向”中结合全部记录生成。</p></div></div>
+      <div class="classifier">
+        <div class="classifier-head"><span>归档</span>${m.userKind ? '<span class="locked-pill">已手动锁定</span>' : ""}</div>
+        <div class="chips kind-chips">${["person","event","content"].map(k => `<button class="chip ${m.kind === k ? "active" : ""}" data-setkind="${k}">${kinds[k].label}</button>`).join("")}</div>
+        ${m.kind === "person" ? `<input class="subject-input" id="subject-input" type="text" value="${escapeAttr(m.subject || "")}" placeholder="是谁？如 妈妈、儿子、老王" autocomplete="off" />` : ""}
+        <p class="classifier-note">${m.userKind ? "你改过的分类会被锁定，整体分析不会覆盖它。" : `当前主题：${escapeHTML(m.topic || "日常")} · 轻点上面可手动改分类`}</p>
+      </div>
       <div class="detail-actions"><button class="action-button" data-edit>修改原文</button><button class="action-button" data-share>分享记忆</button><button class="action-button danger" data-delete>删除记忆</button></div>
     </div>
   </section>`;
@@ -628,6 +634,9 @@ function bindEvents() {
 
   document.querySelector("[data-edit]")?.addEventListener("click", () => { state.editor = true; render(); });
   document.querySelector("[data-save-edit]")?.addEventListener("click", saveEdit);
+  document.querySelectorAll("[data-setkind]").forEach(el => el.addEventListener("click", () => setMemoryKind(el.dataset.setkind)));
+  const subjectInput = document.querySelector("#subject-input");
+  subjectInput?.addEventListener("change", () => setMemorySubject(subjectInput.value));
   document.querySelectorAll("[data-share]").forEach(el => el.addEventListener("click", shareSelected));
   document.querySelector("[data-delete]")?.addEventListener("click", deleteSelected);
   document.querySelector("[data-confirm-delete]")?.addEventListener("click", confirmDeleteSelected);
@@ -674,13 +683,39 @@ function saveNewMemory() {
   if (!m.urgentSignal) notify("记忆已保存到本机");
 }
 
+function setMemoryKind(kind) {
+  const m = state.memories.find(item => item.id === state.selectedId);
+  if (!m || !["person", "event", "content"].includes(kind)) return;
+  m.kind = kind;
+  if (kind !== "person") m.subject = null;
+  m.userKind = true;
+  m.archiveVersion = ARCHIVE_VERSION;
+  saveMemories();
+  markAnalysisStale();
+  syncMemoriesToBridge({ silent: true });
+  render();
+}
+
+function setMemorySubject(value) {
+  const m = state.memories.find(item => item.id === state.selectedId);
+  if (!m) return;
+  m.subject = value.trim().slice(0, 40) || null;
+  m.kind = "person";
+  m.userKind = true;
+  m.archiveVersion = ARCHIVE_VERSION;
+  saveMemories();
+  markAnalysisStale();
+  syncMemoriesToBridge({ silent: true });
+  render();
+}
+
 function saveEdit() {
   const text = document.querySelector("#editor-text")?.value.trim();
   const m = state.memories.find(item => item.id === state.selectedId);
   if (!text || !m) return;
   Object.assign(m, {
     text,
-    ...classifyMemory(text),
+    ...(m.userKind ? { topic: detectTopic(text) } : classifyMemory(text)),
     urgentSignal: detectUrgentSignal(text),
     insight: "",
     insightLabel: "",
@@ -1239,6 +1274,7 @@ function applyHolisticAnalysis(analysis) {
   if (classifications.length) {
     const byId = new Map(classifications.map(item => [item.id, item]));
     state.memories = state.memories.map(memoryItem => {
+      if (memoryItem.userKind) return memoryItem;   // 用户手动锁定的分类不被覆盖
       const next = byId.get(memoryItem.id);
       if (!next || !["person", "event", "content"].includes(next.kind)) return memoryItem;
       return {
