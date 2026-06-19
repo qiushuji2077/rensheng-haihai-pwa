@@ -1,5 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
+const APP_VERSION = "1.2.0";
 const LAST_BACKUP_KEY = "rensheng-haihai.last-backup.v1";
 const BACKUP_FORMAT = "rensheng-haihai-encrypted-backup";
 const BACKUP_AAD = "rensheng-haihai-backup:v1";
@@ -371,6 +372,7 @@ function renderProtection() {
       <label class="protection-action"><span>↑</span><div><strong>恢复加密备份</strong><small>从 .haihai 文件恢复</small></div><input id="restore-file" type="file" accept=".haihai,application/json" hidden /></label>
     </div>
     <button class="plain-link" data-install>如何安装到主屏幕</button>
+    <div class="version-line"><span>版本 ${APP_VERSION}</span><button data-check-update>检查更新</button></div>
   </section></div>`;
 }
 
@@ -420,6 +422,7 @@ function bindEvents() {
   document.querySelectorAll("[data-restore-strategy]").forEach(el => el.addEventListener("click", () => { state.restoreStrategy = el.dataset.restoreStrategy; render(); }));
   document.querySelector("[data-create-encrypted]")?.addEventListener("click", createEncryptedBackup);
   document.querySelector("[data-restore-encrypted]")?.addEventListener("click", restoreEncryptedBackup);
+  document.querySelector("[data-check-update]")?.addEventListener("click", checkForUpdate);
   document.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", closeModal));
   document.querySelector("[data-overlay]")?.addEventListener("click", e => { if (e.target === e.currentTarget) closeModal(); });
 
@@ -761,6 +764,21 @@ function formatBackupDate(value) {
   return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
 }
 
+async function checkForUpdate() {
+  if (!("serviceWorker" in navigator)) return notify("当前浏览器不支持离线更新");
+  const button = document.querySelector("[data-check-update]");
+  if (button) { button.disabled = true; button.textContent = "检查中…"; }
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    await registration?.update();
+    notify("已检查更新；如有新版会自动刷新");
+  } catch {
+    notify("检查失败，请确认网络连接");
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "检查更新"; }
+  }
+}
+
 function computeStats() {
   const recent = state.memories.filter(m => daysAgo(m.createdAt) <= 14);
   const selfDays = new Set(recent.filter(m => m.kind === "person" && m.subject === "我").map(m => isoDay(new Date(m.createdAt)))).size;
@@ -806,5 +824,27 @@ function escapeHTML(value="") { return String(value).replace(/[&<>"']/g, c => ({
 function escapeAttr(value="") { return escapeHTML(value).replace(/`/g, "&#96;"); }
 function notify(message) { toast.textContent = message; toast.classList.add("show"); clearTimeout(notify.timer); notify.timer = setTimeout(() => toast.classList.remove("show"), 1800); }
 
-if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("./sw.js"));
+if ("serviceWorker" in navigator) {
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+  window.addEventListener("load", async () => {
+    try {
+      const registration = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
+      await registration.update();
+    } catch (error) {
+      console.warn("离线服务更新失败", error);
+    }
+  });
+  document.addEventListener("visibilitychange", async () => {
+    if (document.visibilityState !== "visible") return;
+    try {
+      const registration = await navigator.serviceWorker.getRegistration();
+      await registration?.update();
+    } catch {}
+  });
+}
 render();

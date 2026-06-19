@@ -550,6 +550,23 @@ button { cursor: pointer; }
   background: transparent;
   font-size: 12.5px;
 }
+.version-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+  color: var(--ghost);
+  font-size: 10.5px;
+}
+.version-line button {
+  border: 0;
+  padding: 6px;
+  color: var(--teal);
+  background: transparent;
+  font-size: 10.5px;
+}
+.version-line button:disabled { opacity: .55; }
 .field-label { display: grid; gap: 7px; margin-top: 15px; color: var(--body); font-size: 12.5px; }
 .secure-field {
   width: 100%;
