@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -72,17 +72,121 @@ function loadMemories() {
         const cleaned = saved
           .filter(item => !SAMPLE_TEXTS.has(item.text))
           .map(migrateMemory);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+        safeSetItem(STORAGE_KEY, JSON.stringify(cleaned));
         return cleaned;
       }
     }
   } catch {}
-  localStorage.setItem(STORAGE_KEY, "[]");
+  safeSetItem(STORAGE_KEY, "[]");
   return [];
 }
 
 function saveMemories() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.memories));
+  safeSetItem(STORAGE_KEY, JSON.stringify(state.memories));
+  idbSet(STORAGE_KEY, state.memories);          // 异步镜像到更耐久的 IndexedDB
+}
+
+function persistHolistic() {
+  if (!state.holisticAnalysis) return;
+  safeSetItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+  idbSet(HOLISTIC_ANALYSIS_KEY, state.holisticAnalysis);
+}
+
+// ── 耐久存储 ──────────────────────────────────────────────
+// iOS 上 localStorage 长期不用可能被系统清理，且只有约 5MB。
+// 这里用 IndexedDB 作为更大、更耐久的镜像，两者互为备份；
+// 同时请求「持久化」授权，尽量让本站存储免于被自动清除。
+// 任何一处写失败都会明确提示，绝不静默丢数据。
+function safeSetItem(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (error) {
+    console.error("本地存储写入失败", error);
+    notify("⚠️ 设备存储写入失败，请尽快用「记忆保护」创建一次备份");
+    return false;
+  }
+}
+
+const IDB_NAME = "rensheng-haihai";
+const IDB_STORE = "kv";
+let idbPromise = null;
+function idbOpen() {
+  if (idbPromise) return idbPromise;
+  idbPromise = new Promise(resolve => {
+    if (!("indexedDB" in window)) return resolve(null);
+    let request;
+    try { request = indexedDB.open(IDB_NAME, 1); } catch { return resolve(null); }
+    request.onupgradeneeded = () => request.result.createObjectStore(IDB_STORE);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
+  });
+  return idbPromise;
+}
+function idbSet(key, value) {
+  return idbOpen().then(db => {
+    if (!db) return false;
+    return new Promise(resolve => {
+      try {
+        const tx = db.transaction(IDB_STORE, "readwrite");
+        tx.objectStore(IDB_STORE).put(value, key);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch { resolve(false); }
+    });
+  }).catch(() => false);
+}
+function idbGet(key) {
+  return idbOpen().then(db => {
+    if (!db) return undefined;
+    return new Promise(resolve => {
+      try {
+        const tx = db.transaction(IDB_STORE, "readonly");
+        const request = tx.objectStore(IDB_STORE).get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => resolve(undefined);
+      } catch { resolve(undefined); }
+    });
+  }).catch(() => undefined);
+}
+async function requestPersistentStorage() {
+  try {
+    if (!navigator.storage?.persist) return;
+    if (await navigator.storage.persisted?.()) return;
+    await navigator.storage.persist();
+  } catch {}
+}
+
+// 启动兜底：若 localStorage 曾被系统清理，用 IndexedDB 镜像补回；
+// 两边取并集，确保一条都不丢。再把当前内容回写 IndexedDB（首次启用时迁移已有数据）。
+async function hydrateFromDurableStore() {
+  await requestPersistentStorage();
+  let durable;
+  try { durable = await idbGet(STORAGE_KEY); } catch { durable = undefined; }
+  if (Array.isArray(durable) && durable.length) {
+    const durableMemories = durable.map(migrateMemory).filter(Boolean);
+    const merged = mergeMemories(state.memories, durableMemories);
+    if (merged.length !== state.memories.length) {
+      state.memories = merged;
+      safeSetItem(STORAGE_KEY, JSON.stringify(state.memories));
+      render();
+    }
+  }
+  idbSet(STORAGE_KEY, state.memories);
+  if (state.holisticAnalysis) {
+    idbSet(HOLISTIC_ANALYSIS_KEY, state.holisticAnalysis);
+  } else {
+    try {
+      const durableAnalysis = await idbGet(HOLISTIC_ANALYSIS_KEY);
+      if (durableAnalysis && typeof durableAnalysis === "object") {
+        state.holisticAnalysis = durableAnalysis;
+        safeSetItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(durableAnalysis));
+        if (state.view === "summary") render();
+      }
+    } catch {}
+  }
 }
 
 function loadHolisticAnalysis() {
@@ -101,7 +205,7 @@ function loadCodexConfig() {
     const endpoint = normalizeEndpoint(params.get("codex_endpoint") || "");
     if (token && endpoint) {
       const paired = { token, endpoint };
-      localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(paired));
+      safeSetItem(CODEX_CONFIG_KEY, JSON.stringify(paired));
       history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
       return paired;
     }
@@ -318,7 +422,7 @@ function renderSummary() {
       ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
       ${analysis.keySignals?.length ? `<div class="section-label">值得留意</div>${analysis.keySignals.map(signal => `<article class="warning-row ${signal.level === "attention" ? "" : "gold"}"><span>${signal.level === "attention" ? "▲" : "✦"}</span><div><strong>${escapeHTML(signal.title)}</strong><p>${escapeHTML(signal.detail)}</p></div></article>`).join("")}` : ""}
       ${analysis.directions?.length ? `<div class="section-label">下一步方向</div><div class="direction-list">${analysis.directions.map(item => `<article><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.why)}</p><div>${escapeHTML(item.nextStep)}</div><span>${escapeHTML(item.horizon || "接下来")}</span></article>`).join("")}</div>` : ""}
-      <p class="privacy-note">${analysis.source === "codex" ? `由 Codex 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接你的电脑：记录会同步到本地桥；Codex 只在手动或每周任务中分析" : "当前未连接 Codex，记忆仍只在这台设备"}</p>
+      <p class="privacy-note">${analysis.source === "codex" ? `由 Codex 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接电脑：记忆先加密同步到电脑本地；做整体分析时，会把记忆交给电脑上登录的 Codex（云端模型）处理" : "当前未连接 Codex，记忆只在这台设备本地保存与分析"}</p>
     </div>
   </section>`;
 }
@@ -734,7 +838,7 @@ async function restoreEncryptedBackup() {
     saveMemories();
     if (payload.holisticAnalysis && typeof payload.holisticAnalysis === "object") {
       state.holisticAnalysis = payload.holisticAnalysis;
-      localStorage.setItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+      persistHolistic();
     } else {
       markAnalysisStale();
     }
@@ -1015,7 +1119,7 @@ function formatAnalysisTime(value) {
 function markAnalysisStale() {
   if (!state.holisticAnalysis) return;
   state.holisticAnalysis = { ...state.holisticAnalysis, stale: true };
-  localStorage.setItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+  persistHolistic();
 }
 
 async function saveCodexConnection() {
@@ -1029,7 +1133,7 @@ async function saveCodexConnection() {
   try {
     if (!state.codexConfig.endpoint) await discoverBridgeEndpoint();
     await bridgeFetch("/health", { timeout: 10000 });
-    localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(state.codexConfig));
+    safeSetItem(CODEX_CONFIG_KEY, JSON.stringify(state.codexConfig));
     await syncMemoriesToBridge({ silent: false });
     state.codexMode = null;
     render();
@@ -1132,7 +1236,7 @@ function applyHolisticAnalysis(analysis) {
     generatedAt: analysis.generatedAt || new Date().toISOString(),
     memoryCount: Number.isFinite(analysis.memoryCount) ? analysis.memoryCount : state.memories.length
   };
-  localStorage.setItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+  persistHolistic();
 }
 
 async function bridgeFetch(path, options = {}) {
@@ -1188,7 +1292,7 @@ async function discoverBridgeEndpoint() {
     if (!endpoint) return "";
     if (state.codexConfig.endpoint !== endpoint) {
       state.codexConfig = { ...state.codexConfig, endpoint };
-      localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(state.codexConfig));
+      safeSetItem(CODEX_CONFIG_KEY, JSON.stringify(state.codexConfig));
     }
     return endpoint;
   } catch {
@@ -1259,4 +1363,5 @@ if ("serviceWorker" in navigator) {
   });
 }
 render();
+hydrateFromDurableStore();
 hydrateCodexState();
