@@ -1,9 +1,9 @@
-const CACHE = "rensheng-haihai-v11";
+const CACHE = "rensheng-haihai-v12";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=1.4.1",
-  "./app.js?v=1.4.1",
+  "./styles.css?v=1.5.0",
+  "./app.js?v=1.5.0",
   "./manifest.webmanifest",
   "./bridge.json",
   "./icons/icon-192.png",

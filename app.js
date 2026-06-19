@@ -1,10 +1,11 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.4.1";
+const APP_VERSION = "1.5.0";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
 const LAST_BACKUP_KEY = "rensheng-haihai.last-backup.v1";
+const RESOLVED_SIGNALS_KEY = "rensheng-haihai.resolved-signals.v1";
 const BACKUP_FORMAT = "rensheng-haihai-encrypted-backup";
 const BACKUP_AAD = "rensheng-haihai-backup:v1";
 const BACKUP_ITERATIONS = 310000;
@@ -46,6 +47,8 @@ let state = {
   selectedId: null,
   facet: null,
   facetBack: "lenses",
+  resolvedSignals: loadResolvedSignals(),
+  showResolved: false,
   search: "",
   scope: "all",
   composer: false,
@@ -64,6 +67,8 @@ let state = {
   holisticAnalysis: loadHolisticAnalysis(),
   codexConfig: loadCodexConfig()
 };
+
+let lastRenderedView = null;   // 用于切页进场动画（只在视图变化时触发一次）
 
 function loadMemories() {
   try {
@@ -342,6 +347,49 @@ function openFacet(type, value) {
   window.scrollTo(0, 0);
 }
 
+// 触感反馈（Android 有效；iOS Safari/PWA 不支持 Vibration API，会静默忽略）
+function haptic(pattern) { try { navigator.vibrate?.(pattern); } catch {} }
+
+function loadResolvedSignals() {
+  try { const a = JSON.parse(localStorage.getItem(RESOLVED_SIGNALS_KEY)); return Array.isArray(a) ? a : []; }
+  catch { return []; }
+}
+
+// 给信号一个稳定 key（标题 + 相关记忆 id）
+function signalKey(signal) {
+  const ids = (signal.relatedMemoryIds || []).slice().sort().join(",");
+  return `${signal.title}|${ids}`;
+}
+
+function resolveSignal(key) {
+  if (!state.resolvedSignals.includes(key)) {
+    state.resolvedSignals.push(key);
+    safeSetItem(RESOLVED_SIGNALS_KEY, JSON.stringify(state.resolvedSignals));
+  }
+  haptic(15);
+  notify("已标记为处理");
+  render();
+}
+
+function restoreSignal(key) {
+  state.resolvedSignals = state.resolvedSignals.filter(k => k !== key);
+  safeSetItem(RESOLVED_SIGNALS_KEY, JSON.stringify(state.resolvedSignals));
+  render();
+}
+
+// 把一条信号记成跟进——在记忆流里生成一条可见的记录
+function followUpFromSignal(title) {
+  if (!title) return;
+  const m = memory(`跟进：${title}`);
+  state.memories.unshift(m);
+  saveMemories();
+  markAnalysisStale();
+  syncMemoriesToBridge({ silent: true });
+  haptic(15);
+  notify("已记为跟进，在记忆流里");
+  render();
+}
+
 function render() {
   const views = {
     stream: renderStream,
@@ -351,7 +399,10 @@ function render() {
     summary: renderSummary,
     detail: renderDetail
   };
+  const viewChanged = state.view !== lastRenderedView;
+  lastRenderedView = state.view;
   app.innerHTML = `<main class="app-shell">${(views[state.view] || renderStream)()}</main>${renderModal()}`;
+  if (viewChanged) app.querySelector(".screen")?.classList.add("view-enter");  // 仅在切页时做一次进场动画
   bindEvents();
 }
 
@@ -472,6 +523,31 @@ function renderFacet() {
   </section>`;
 }
 
+function renderSignals(analysis) {
+  const all = analysis.keySignals || [];
+  if (!all.length) return "";
+  const active = all.filter(s => !state.resolvedSignals.includes(signalKey(s)));
+  const resolved = all.filter(s => state.resolvedSignals.includes(signalKey(s)));
+  let html = "";
+  if (active.length) {
+    html += `<div class="section-label">值得留意</div>` + active.map(signal => {
+      const key = signalKey(signal);
+      const gold = signal.level !== "attention";
+      return `<article class="warning-row ${gold ? "gold" : ""}"><span>${gold ? "✦" : "▲"}</span><div style="flex:1">
+        <strong>${escapeHTML(signal.title)}</strong><p>${escapeHTML(signal.detail)}</p>
+        <div class="signal-actions"><button class="signal-btn" data-resolve-signal="${escapeAttr(key)}">标记已处理</button><button class="signal-btn ghost" data-followup-title="${escapeAttr(signal.title)}">记为跟进</button></div>
+      </div></article>`;
+    }).join("");
+  }
+  if (resolved.length) {
+    html += `<button class="resolved-toggle" data-show-resolved>已处理 ${resolved.length} 条 ${state.showResolved ? "▲" : "▼"}</button>`;
+    if (state.showResolved) {
+      html += resolved.map(signal => `<article class="warning-row resolved"><span>✓</span><div style="flex:1"><strong>${escapeHTML(signal.title)}</strong><div class="signal-actions"><button class="signal-btn ghost" data-restore-signal="${escapeAttr(signalKey(signal))}">恢复</button></div></div></article>`).join("");
+    }
+  }
+  return html;
+}
+
 function renderSummary() {
   const analysis = state.holisticAnalysis || buildLocalOverview();
   const connected = Boolean(state.codexConfig.token);
@@ -486,7 +562,7 @@ function renderSummary() {
         <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 Codex 更新整体分析" : "连接 Codex 进行整体分析"}</button>
       </section>
       ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article data-subject="${escapeAttr(person.name)}"><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
-      ${analysis.keySignals?.length ? `<div class="section-label">值得留意</div>${analysis.keySignals.map(signal => `<article class="warning-row ${signal.level === "attention" ? "" : "gold"}"><span>${signal.level === "attention" ? "▲" : "✦"}</span><div><strong>${escapeHTML(signal.title)}</strong><p>${escapeHTML(signal.detail)}</p></div></article>`).join("")}` : ""}
+      ${renderSignals(analysis)}
       ${analysis.directions?.length ? `<div class="section-label">下一步方向</div><div class="direction-list">${analysis.directions.map(item => `<article><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.why)}</p><div>${escapeHTML(item.nextStep)}</div><span>${escapeHTML(item.horizon || "接下来")}</span></article>`).join("")}</div>` : ""}
       <p class="privacy-note">${analysis.source === "codex" ? `由 Codex 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接电脑：记忆先加密同步到电脑本地；做整体分析时，会把记忆交给电脑上登录的 Codex（云端模型）处理" : "当前未连接 Codex，记忆只在这台设备本地保存与分析"}</p>
     </div>
@@ -671,6 +747,10 @@ function bindEvents() {
   document.querySelectorAll("[data-subject]").forEach(el => el.addEventListener("click", () => openFacet("subject", el.dataset.subject)));
   document.querySelectorAll("[data-topic]").forEach(el => el.addEventListener("click", () => openFacet("topic", el.dataset.topic)));
   document.querySelectorAll("[data-kind]").forEach(el => el.addEventListener("click", () => openFacet("kind", el.dataset.kind)));
+  document.querySelectorAll("[data-resolve-signal]").forEach(el => el.addEventListener("click", () => resolveSignal(el.dataset.resolveSignal)));
+  document.querySelectorAll("[data-restore-signal]").forEach(el => el.addEventListener("click", () => restoreSignal(el.dataset.restoreSignal)));
+  document.querySelectorAll("[data-followup-title]").forEach(el => el.addEventListener("click", () => followUpFromSignal(el.dataset.followupTitle)));
+  document.querySelector("[data-show-resolved]")?.addEventListener("click", () => { state.showResolved = !state.showResolved; render(); });
 
   const composer = document.querySelector("#composer-text");
   const saveButton = document.querySelector("[data-save-memory]");
@@ -725,6 +805,7 @@ function saveNewMemory() {
   state.composer = false;
   state.view = "stream";
   state.urgentAlert = m.urgentSignal;
+  haptic(m.urgentSignal ? [30, 60, 30] : 12);
   render();
   if (!m.urgentSignal) notify("记忆已保存到本机");
 }

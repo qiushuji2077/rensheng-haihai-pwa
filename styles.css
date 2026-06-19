@@ -742,3 +742,17 @@ button { cursor: pointer; }
 .lens-all { margin-top: 12px; width: 100%; border: 0; background: rgba(43,39,34,.05); color: var(--teal, #2e6e73); border-radius: 10px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .lens-all:active { background: rgba(43,39,34,.09); }
 .people-lines article { cursor: pointer; }
+
+/* 信号操作（标记已处理 / 记为跟进 / 恢复） */
+.signal-actions { display: flex; gap: 8px; margin-top: 10px; }
+.signal-btn { border: 0; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; background: rgba(255,255,255,.16); color: inherit; }
+.signal-btn:active { background: rgba(255,255,255,.28); }
+.signal-btn.ghost { background: transparent; border: 1px solid currentColor; opacity: .8; }
+.warning-row.resolved { opacity: .55; }
+.resolved-toggle { width: 100%; border: 0; background: transparent; color: rgba(234,242,238,.5); font-size: 12px; padding: 8px; margin-bottom: 8px; cursor: pointer; }
+
+/* 切页 / 弹层进场（prefers-reduced-motion 时由全局规则自动关闭） */
+@keyframes viewIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.view-enter { animation: viewIn .24s ease both; }
+@keyframes panelIn { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+.modal-panel { animation: panelIn .2s cubic-bezier(.2,.7,.2,1) both; }
