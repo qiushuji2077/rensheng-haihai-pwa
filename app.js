@@ -1,6 +1,9 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
+const ARCHIVE_VERSION = 2;
+const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
+const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
 const LAST_BACKUP_KEY = "rensheng-haihai.last-backup.v1";
 const BACKUP_FORMAT = "rensheng-haihai-encrypted-backup";
 const BACKUP_AAD = "rensheng-haihai-backup:v1";
@@ -20,9 +23,9 @@ const SAMPLE_TEXTS = new Set([
 ]);
 
 const kinds = {
-  person: { label: "人", color: "#c16a4e", facets: ["健康", "人生规划", "发现"], icon: "人" },
-  event: { label: "事", color: "#2e6e73", facets: ["概率预测", "模拟推演"], icon: "↗" },
-  content: { label: "内容", color: "#b08a3e", facets: ["美化", "观点提炼"], icon: "✦" }
+  person: { label: "人", color: "#c16a4e", facets: ["关系线", "成长线", "健康信号"], icon: "人" },
+  event: { label: "事", color: "#2e6e73", facets: ["进展", "决定", "风险"], icon: "↗" },
+  content: { label: "内容", color: "#b08a3e", facets: ["想法", "阅读", "灵感"], icon: "✦" }
 };
 
 const icons = {
@@ -47,12 +50,17 @@ let state = {
   editor: false,
   installHelp: false,
   deleteConfirm: false,
+  urgentAlert: null,
   protectionMode: null,
+  codexMode: null,
+  codexBusy: false,
   pendingRestoreFile: null,
   restoreStrategy: "merge",
   recording: false,
   recognition: null,
-  memories: loadMemories()
+  memories: loadMemories(),
+  holisticAnalysis: loadHolisticAnalysis(),
+  codexConfig: loadCodexConfig()
 };
 
 function loadMemories() {
@@ -61,10 +69,10 @@ function loadMemories() {
     if (raw !== null) {
       const saved = JSON.parse(raw);
       if (Array.isArray(saved)) {
-        const cleaned = saved.filter(item => !SAMPLE_TEXTS.has(item.text));
-        if (cleaned.length !== saved.length) {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-        }
+        const cleaned = saved
+          .filter(item => !SAMPLE_TEXTS.has(item.text))
+          .map(migrateMemory);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
         return cleaned;
       }
     }
@@ -76,76 +84,108 @@ function loadMemories() {
 function saveMemories() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.memories));
 }
-function memory(text, createdAt = new Date().toISOString(), forcedKind, forcedSubject) {
-  let analysis = analyze(text);
-  if (forcedKind === "person" && analysis.kind !== "person") {
-    analysis = analyze(`我：${text}`);
-  }
+
+function loadHolisticAnalysis() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(HOLISTIC_ANALYSIS_KEY));
+    return saved && typeof saved === "object" ? saved : null;
+  } catch { return null; }
+}
+
+function loadCodexConfig() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(CODEX_CONFIG_KEY));
+    const current = saved && typeof saved === "object" ? saved : { token: "", endpoint: "" };
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const token = params.get("codex_token");
+    const endpoint = normalizeEndpoint(params.get("codex_endpoint") || "");
+    if (token && endpoint) {
+      const paired = { token, endpoint };
+      localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(paired));
+      history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+      return paired;
+    }
+    return current;
+  } catch { return { token: "", endpoint: "" }; }
+}
+
+function migrateMemory(item) {
+  if (!item || typeof item.text !== "string") return item;
+  if (item.archiveVersion === ARCHIVE_VERSION) return item;
+  return {
+    ...item,
+    ...classifyMemory(item.text),
+    urgentSignal: detectUrgentSignal(item.text),
+    insight: "",
+    insightLabel: "",
+    warning: false,
+    lenses: [],
+    archiveVersion: ARCHIVE_VERSION
+  };
+}
+
+function memory(text, createdAt = new Date().toISOString()) {
+  const archive = classifyMemory(text);
   return {
     id: crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`,
     text,
     createdAt,
     source: "text",
     seconds: 0,
-    kind: forcedKind || analysis.kind,
-    subject: forcedSubject ?? analysis.subject,
-    insight: analysis.insight,
-    insightLabel: analysis.insightLabel,
-    warning: analysis.warning,
-    lenses: analysis.lenses
+    ...archive,
+    urgentSignal: detectUrgentSignal(text),
+    insight: "",
+    insightLabel: "",
+    warning: false,
+    lenses: [],
+    archiveVersion: ARCHIVE_VERSION
   };
 }
 
-function analyze(text) {
+function classifyMemory(text) {
   const relations = [
+    [["小瑞瑞","瑞瑞"],"儿子"],
     [["妈妈","妈","母亲","老妈"],"妈妈"], [["爸爸","爸","父亲","老爸"],"爸爸"],
     [["老婆","妻子","媳妇"],"老婆"], [["老公","丈夫"],"老公"],
-    [["孩子","儿子","女儿","宝宝"],"孩子"], [["朋友","同学","同事","闺蜜"],"朋友"]
+    [["儿子","男孩"],"儿子"], [["女儿","女孩"],"女儿"],
+    [["孩子","小孩","宝宝","娃"],"孩子"], [["朋友","同学","同事","闺蜜"],"朋友"]
   ];
-  const health = ["疼","痛","病","医院","不舒服","发烧","咳嗽","失眠","睡不着","膝盖","头晕","检查","累","肩","眼睛干"].some(w => text.includes(w));
   const event = ["项目","工作","会议","客户","谈判","合同","方案","搬家","计划","任务","面试","预算","决定","报价","上线","发布"].some(w => text.includes(w));
   const subject = relations.find(([keys]) => keys.some(k => text.includes(k)))?.[1] || (text.includes("我") && !event ? "我" : null);
   const kind = subject ? "person" : event ? "event" : "content";
-
-  if (kind === "person") {
-    const who = subject || "我";
-    return {
-      kind, subject: who, warning: health,
-      insightLabel: health ? "健康预警" : "发现",
-      insight: health ? `近期与「${who}」相关的健康信号被提起，建议尽快关注。` : `已记到「${who}」名下，方便日后回看这条关系线。`,
-      lenses: [
-        ...(health ? [{ title:"健康", tone:"warn", badge:"需关注", body: who === "我" ? "你提到了身体上的不适。先别硬扛，留意它是否反复出现，必要时尽早就医。" : `「${who}」近期被提到与健康有关的状况。建议主动关心一次，必要时陪同就医。` }] : []),
-        { title:"人生规划", tone:"event", body: who === "我" ? "把这件事放进更长的方向里看：它是否在推动你想去的地方？" : `可以提前在长期安排里为「${who}」留出更多陪伴的位置。` },
-        { title:"发现", tone:"content", body: who === "我" ? "这是关于你自己的记录。坚持记下来，时间会让你看见变化曲线。" : `你谈到「${who}」时的语气里有在意。也许对方需要的不是建议，而是被听见。` }
-      ]
-    };
-  }
-  if (kind === "event") {
-    const percent = stablePercent(text);
-    return {
-      kind, subject:null, warning:false, insightLabel:"概率预测",
-      insight:`参照过往同类情况，关键结果概率约 ${percent}%。建议先定好底线。`,
-      lenses:[
-        { title:"概率预测", tone:"event", body:`基于这条记录中的不确定信号，关键结果发生的参考概率约 ${percent}%。先想清楚底线再行动。` },
-        { title:"模拟推演", tone:"event", body:"可以分别写下最坏、最可能、最理想三种走向，再为最可能的情况留一点余地。" }
-      ]
-    };
-  }
-  const quote = /[「」"“”]/.test(text);
-  return {
-    kind, subject:null, warning:false, insightLabel: quote ? "美化" : "观点提炼",
-    insight: quote ? "已归入「打动我的句子」合集。" : "已整理成一段更清楚的表达，原话完整保留。",
-    lenses:[
-      { title:"美化", tone:"content", body:quote ? "已为这句话保留原貌，归入「打动我的句子」合集。" : "已把这段想法整理得更顺，原话也完整保留。" },
-      { title:"观点提炼", tone:"event", body:"这条记忆里出现的意象，可能是你心里的一个锚点——值得偶尔回头看看。" }
-    ]
-  };
+  return { kind, subject, topic: detectTopic(text) };
 }
 
-function stablePercent(text) {
-  let hash = 2166136261;
-  for (const char of text) { hash ^= char.codePointAt(0); hash = Math.imul(hash, 16777619); }
-  return 60 + Math.abs(hash % 21);
+function detectTopic(text) {
+  if (["疼","痛","病","医院","发烧","咳嗽","失眠","睡眠","膝盖","头晕","检查"].some(word => text.includes(word))) return "健康";
+  if (["火车","轨道","积木","搭建","拼装","画画","音乐","阅读","游戏"].some(word => text.includes(word))) return "兴趣与探索";
+  if (["吃","糖","饭","菜","水果","零食"].some(word => text.includes(word))) return "日常饮食";
+  if (["学校","老师","课程","作业","学习"].some(word => text.includes(word))) return "学习";
+  if (["项目","客户","方案","会议","工作"].some(word => text.includes(word))) return "工作";
+  return "日常";
+}
+
+function detectUrgentSignal(text) {
+  const signals = [
+    { terms: ["呼吸困难", "喘不上气"], title: "出现呼吸困难相关描述" },
+    { terms: ["胸痛", "胸口痛"], title: "出现胸痛相关描述" },
+    { terms: ["昏厥", "晕倒", "意识不清"], title: "出现意识异常相关描述" },
+    { terms: ["大量出血", "止不住血"], title: "出现严重出血相关描述" },
+    { terms: ["抽搐"], title: "出现抽搐相关描述" },
+    { terms: ["高烧不退"], title: "出现持续高烧相关描述" },
+    { terms: ["自杀", "不想活", "伤害自己"], title: "出现自我伤害相关描述", neverNegate: true }
+  ];
+  for (const signal of signals) {
+    const matched = signal.terms.find(term => text.includes(term));
+    if (!matched) continue;
+    if (!signal.neverNegate && [`没有${matched}`, `无${matched}`, `未出现${matched}`].some(phrase => text.includes(phrase))) continue;
+    return {
+      term: matched,
+      title: signal.title,
+      detail: "App 无法判断真实情况。如现在存在现实危险，请立即联系当地急救、可信赖的人或专业人员。"
+    };
+  }
+  return null;
 }
 
 function go(view) {
@@ -183,8 +223,8 @@ function renderStream() {
       <p class="eyebrow">记忆流 · MEMORY STREAM</p>
       <div class="date-line"><h1 class="display-title">${chineseDate(new Date())}</h1><span>${weekday(new Date())}</span></div>
       <div class="header-actions">
-        <div class="sync-badge"><i class="sync-dot"></i>本地已同步 · 今日 ${today} 条记忆</div>
-        <button class="soft-button" data-go="lenses">透镜</button>
+        <div class="sync-badge"><i class="sync-dot"></i>本地已保存 · 今日 ${today} 条记忆</div>
+        <button class="soft-button" data-go="lenses">分类</button>
         <button class="soft-button protect-button ${backupDue() ? "due" : ""}" data-protect aria-label="记忆保护">${icons.shield}</button>
       </div>
     </header>
@@ -206,10 +246,9 @@ function renderTimelineCard(m) {
 }
 
 function renderMemoryCard(m) {
-  return `<button class="memory-card ${m.warning ? "warn" : ""}" data-memory="${m.id}">
+  return `<button class="memory-card" data-memory="${m.id}">
     <div class="card-top"><time class="time">${formatTime(m.createdAt)}</time>${tag(m)}</div>
     <p class="memory-text">${escapeHTML(m.text)}</p>
-    ${m.insight ? `<div class="insight ${m.warning ? "warn" : ""}"><i>${m.warning ? "▲" : "✦"}</i><span>${escapeHTML(m.insightLabel)}：${escapeHTML(m.insight)}</span></div>` : ""}
   </button>`;
 }
 
@@ -228,12 +267,12 @@ function renderSearch() {
   const keyword = state.search.trim().toLowerCase();
   const results = state.memories
     .filter(m => state.scope === "all" || m.kind === state.scope)
-    .filter(m => !keyword || [m.text,m.subject,m.insight,...m.lenses.flatMap(l => [l.title,l.body])].filter(Boolean).join(" ").toLowerCase().includes(keyword))
+    .filter(m => !keyword || [m.text, m.subject, m.topic].filter(Boolean).join(" ").toLowerCase().includes(keyword))
     .sort(byNewest);
   return `<section class="screen">
     ${topbar("搜索记忆", "stream")}
     <div class="content-pad">
-      <label class="search-box">${icons.search}<input id="search-input" type="search" value="${escapeAttr(state.search)}" placeholder="搜索原文、人物或分析" autocomplete="off" /></label>
+      <label class="search-box">${icons.search}<input id="search-input" type="search" value="${escapeAttr(state.search)}" placeholder="搜索原文、人物或主题" autocomplete="off" /></label>
       <div class="chips">${["all","person","event","content"].map(scope => `<button class="chip ${state.scope === scope ? "active" : ""}" data-scope="${scope}">${scope === "all" ? "全部" : kinds[scope].label}</button>`).join("")}</div>
       <p class="result-label">${keyword ? `找到 ${results.length} 条相关记忆` : `最近 ${results.length} 条`}</p>
       <div class="result-list">${results.length ? results.map(renderMemoryCard).join("") : renderEmpty("没有找到相关记忆", "换个关键词，或切换分类试试。")}</div>
@@ -253,10 +292,10 @@ function renderLenses() {
   const today = state.memories.filter(m => isToday(m.createdAt)).sort(byOldest);
   const preview = `~/记忆/${isoDay(new Date())}.md\n# ${chineseDate(new Date())}\n${today.slice(0,3).map(m => `- ${formatTime(m.createdAt)} [${tagText(m)}] ${m.text.slice(0,10)}${m.text.length > 10 ? "…" : ""}`).join("\n") || "- 今天还没有记录…"}`;
   return `<section class="screen">
-    ${topbar("分类透镜", "stream")}
+    ${topbar("记忆分类", "stream")}
     <div class="content-pad lens-overview">
-      <p class="eyebrow">三种透镜 · LENSES</p>
-      <h1 class="display-title">系统怎么看你的记忆</h1>
+      <p class="eyebrow">三种归档 · ARCHIVE</p>
+      <h1 class="display-title">先分清，再整体理解</h1>
       ${cards}
       <section class="md-card"><div class="md-head"><span class="md-mark">md</span>本地记录 · 离线也在写</div><pre class="md-preview">${escapeHTML(preview)}</pre><p>Markdown 方便阅读；加密备份才能完整恢复全部记忆与分析。</p><div class="md-actions"><button class="action-button" data-protect>加密备份</button><button class="action-button" data-export>导出 Markdown</button></div></section>
     </div>
@@ -264,18 +303,22 @@ function renderLenses() {
 }
 
 function renderSummary() {
-  const stats = computeStats();
+  const analysis = state.holisticAnalysis || buildLocalOverview();
+  const connected = Boolean(state.codexConfig.token);
+  const stale = Boolean(analysis.stale);
   return `<section class="screen dark">
     ${topbar("总结与方向", "stream")}
     <div class="content-pad summary">
-      <p class="eyebrow">本地分析 · 周度总结</p><h1 class="display-title">方向 与 预警</h1>
-      <section class="direction-card"><div class="direction-label">本季方向 · 你提前定下的</div><p class="direction-quote">「照顾好身体，也照顾好身边的人。」</p>
-        <div class="goals">${stats.goals.map((g,i) => `<div><div class="goal-label"><span>${g.name}</span><span>${g.value}%</span></div><div class="bar ${i ? "warm" : ""}"><i style="width:${g.value}%"></i></div></div>`).join("")}</div>
+      <p class="eyebrow">${analysis.source === "codex" ? "CODEX · 整体分析" : "本地归档 · 等待整体分析"}</p><h1 class="display-title">总结 与 方向</h1>
+      <section class="direction-card">
+        <div class="direction-label">${analysis.periodLabel || "当前记忆"}${stale ? " · 有新记录待更新" : ""}</div>
+        <p class="direction-quote">「${escapeHTML(analysis.overview)}」</p>
+        <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 Codex 更新整体分析" : "连接 Codex 进行整体分析"}</button>
       </section>
-      <div class="section-label">预警</div>
-      ${stats.warnings.length ? stats.warnings.map((w,i) => `<article class="warning-row ${i % 2 ? "gold" : ""}"><span>▲</span><div><strong>${escapeHTML(w.title)}</strong><p>${escapeHTML(w.detail)}</p></div></article>`).join("") : `<article class="warning-row gold"><span>✦</span><div><strong>暂时平稳</strong><p>最近的记忆中还没有形成需要提醒的重复信号。</p></div></article>`}
-      ${stats.prediction ? `<div class="section-label">概率预测 · 事</div><section class="prediction-card"><div class="prediction-head"><strong>${escapeHTML(stats.prediction.headline)}</strong><span>${stats.prediction.percent}%</span></div><div class="bar"><i style="width:${stats.prediction.percent}%"></i></div><p>${escapeHTML(stats.prediction.note)}</p></section>` : ""}
-      <p class="privacy-note">本地规则 · 离线运行<br/>你的记忆，不会离开这台设备</p>
+      ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
+      ${analysis.keySignals?.length ? `<div class="section-label">值得留意</div>${analysis.keySignals.map(signal => `<article class="warning-row ${signal.level === "attention" ? "" : "gold"}"><span>${signal.level === "attention" ? "▲" : "✦"}</span><div><strong>${escapeHTML(signal.title)}</strong><p>${escapeHTML(signal.detail)}</p></div></article>`).join("")}` : ""}
+      ${analysis.directions?.length ? `<div class="section-label">下一步方向</div><div class="direction-list">${analysis.directions.map(item => `<article><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.why)}</p><div>${escapeHTML(item.nextStep)}</div><span>${escapeHTML(item.horizon || "接下来")}</span></article>`).join("")}</div>` : ""}
+      <p class="privacy-note">${analysis.source === "codex" ? `由 Codex 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接你的电脑：记录会同步到本地桥；Codex 只在手动或每周任务中分析" : "当前未连接 Codex，记忆仍只在这台设备"}</p>
     </div>
   </section>`;
 }
@@ -289,15 +332,10 @@ function renderDetail() {
       <div class="detail-meta">${tag(m)}<span class="detail-date">${formatFullDate(m.createdAt)}</span></div>
       <p class="detail-text">${escapeHTML(m.text)}</p>
       <div class="source-line">${m.source === "voice" ? "🎙" : "✎"} ${m.source === "voice" ? `语音 ${m.seconds || 0} 秒 · 本地转写` : "手动输入 · 本地记录"}</div>
-      <div class="analysis-title">✦ 本地分析 · 从「${kinds[m.kind].label}」的角度</div>
-      <div class="lens-list">${m.lenses.map(renderLens).join("")}</div>
-      <div class="detail-actions"><button class="action-button" data-edit>修改原文</button><button class="action-button" data-share>分享记忆</button><button class="action-button" data-reanalyze>重新分析</button><button class="action-button danger" data-delete>删除记忆</button></div>
+      <div class="archive-note"><span>归档</span><div><strong>${escapeHTML(tagText(m))}${m.topic ? ` · ${escapeHTML(m.topic)}` : ""}</strong><p>单条记忆只做轻量归档；关键发现会在“总结与方向”中结合全部记录生成。</p></div></div>
+      <div class="detail-actions"><button class="action-button" data-edit>修改原文</button><button class="action-button" data-share>分享记忆</button><button class="action-button danger" data-delete>删除记忆</button></div>
     </div>
   </section>`;
-}
-
-function renderLens(lens) {
-  return `<article class="lens-card ${lens.tone === "warn" ? "warn" : ""}"><div class="lens-head"><span class="lens-icon">${lens.tone === "warn" ? "♥" : "✦"}</span><strong>${escapeHTML(lens.title)}</strong>${lens.badge ? `<span class="lens-badge">${escapeHTML(lens.badge)}</span>` : ""}</div><p>${escapeHTML(lens.body)}</p></article>`;
 }
 
 function topbar(title, backView, trailing = "<span></span>") {
@@ -305,11 +343,13 @@ function topbar(title, backView, trailing = "<span></span>") {
 }
 
 function renderModal() {
+  if (state.urgentAlert) return renderUrgentAlert();
   if (state.composer) return renderComposer();
   if (state.editor) return renderEditor();
   if (state.installHelp) return renderInstallHelp();
   if (state.deleteConfirm) return renderDeleteConfirm();
   if (state.protectionMode) return renderProtection();
+  if (state.codexMode) return renderCodexConnection();
   return "";
 }
 
@@ -329,7 +369,7 @@ function renderEditor() {
   return `<div class="modal"><section class="modal-panel editor-panel">
     <div class="composer-head"><button class="text-button" data-close>取消</button><strong>修改记忆</strong><span></span></div>
     <textarea class="editor-area" id="editor-text">${escapeHTML(m?.text || "")}</textarea>
-    <p class="result-label">保存后会根据新文字重新分类与分析。</p>
+    <p class="result-label">保存后会根据新文字重新归档，整体分析将在总结页更新。</p>
     <div class="editor-actions"><button class="action-button" data-close>取消</button><button class="action-button" data-save-edit>保存修改</button></div>
   </section></div>`;
 }
@@ -351,6 +391,30 @@ function renderDeleteConfirm() {
     <h2>删除这条记忆？</h2>
     <p>删除后无法恢复，对应的本地记录也会一起移除。</p>
     <div class="editor-actions"><button class="action-button" data-close>取消</button><button class="action-button danger" data-confirm-delete>确认删除</button></div>
+  </section></div>`;
+}
+
+function renderUrgentAlert() {
+  return `<div class="modal" data-overlay><section class="modal-panel install-sheet urgent-sheet">
+    <div class="urgent-symbol">!</div>
+    <h2>${escapeHTML(state.urgentAlert.title)}</h2>
+    <p>${escapeHTML(state.urgentAlert.detail)}</p>
+    <p class="urgent-boundary">这只是关键词提醒，不是医疗或安全诊断。</p>
+    <button class="wide-primary urgent-button" data-close>我知道了</button>
+  </section></div>`;
+}
+
+function renderCodexConnection() {
+  return `<div class="modal" data-overlay><section class="modal-panel install-sheet protection-sheet">
+    <button class="icon-button" data-close style="margin-left:auto">✕</button>
+    <div class="protection-symbol codex-symbol">C</div>
+    <h2>连接电脑上的 Codex</h2>
+    <p>在电脑启动“人生海海 Codex 桥”后，从配对页复制连接码。桥接地址会自动发现，App 不会保存你的 ChatGPT 密码。</p>
+    <label class="field-label">连接码<input id="codex-token" class="secure-field" type="password" autocomplete="off" value="${escapeAttr(state.codexConfig.token || "")}" placeholder="粘贴电脑生成的连接码" /></label>
+    <label class="field-label">桥接地址 · 自动发现，通常不用填写<input id="codex-endpoint" class="secure-field" type="url" autocomplete="off" value="${escapeAttr(state.codexConfig.endpoint || "")}" placeholder="留空即可自动发现" /></label>
+    <div class="privacy-box teal"><strong>只开放记忆同步与整体分析</strong><span>连接后，记录会同步到你自己的电脑，供每周任务使用；桥接服务不接收自由指令，也不允许 Codex 修改其他文件。</span></div>
+    <button class="wide-primary" data-save-codex>保存并测试连接</button>
+    ${state.codexConfig.token ? `<button class="plain-link danger-text" data-disconnect-codex>断开 Codex</button>` : ""}
   </section></div>`;
 }
 
@@ -441,7 +505,16 @@ function bindEvents() {
   document.querySelectorAll("[data-share]").forEach(el => el.addEventListener("click", shareSelected));
   document.querySelector("[data-delete]")?.addEventListener("click", deleteSelected);
   document.querySelector("[data-confirm-delete]")?.addEventListener("click", confirmDeleteSelected);
-  document.querySelector("[data-reanalyze]")?.addEventListener("click", reanalyzeSelected);
+  document.querySelector("[data-codex-analyze]")?.addEventListener("click", () => {
+    if (!state.codexConfig.token) {
+      state.codexMode = "connect";
+      render();
+    } else {
+      refreshHolisticAnalysis();
+    }
+  });
+  document.querySelector("[data-save-codex]")?.addEventListener("click", saveCodexConnection);
+  document.querySelector("[data-disconnect-codex]")?.addEventListener("click", disconnectCodex);
   document.querySelector("[data-export]")?.addEventListener("click", exportMarkdown);
 }
 
@@ -451,7 +524,9 @@ function closeModal() {
   state.editor = false;
   state.installHelp = false;
   state.deleteConfirm = false;
+  state.urgentAlert = null;
   state.protectionMode = null;
+  state.codexMode = null;
   state.pendingRestoreFile = null;
   render();
 }
@@ -463,32 +538,37 @@ function saveNewMemory() {
   m.source = state.recording ? "voice" : "text";
   state.memories.unshift(m);
   saveMemories();
+  markAnalysisStale();
+  syncMemoriesToBridge({ silent: true });
   stopSpeech();
   state.composer = false;
   state.view = "stream";
+  state.urgentAlert = m.urgentSignal;
   render();
-  notify("记忆已保存到本机");
+  if (!m.urgentSignal) notify("记忆已保存到本机");
 }
 
 function saveEdit() {
   const text = document.querySelector("#editor-text")?.value.trim();
   const m = state.memories.find(item => item.id === state.selectedId);
   if (!text || !m) return;
-  const result = analyze(text);
-  Object.assign(m, { text, ...result });
+  Object.assign(m, {
+    text,
+    ...classifyMemory(text),
+    urgentSignal: detectUrgentSignal(text),
+    insight: "",
+    insightLabel: "",
+    warning: false,
+    lenses: [],
+    archiveVersion: ARCHIVE_VERSION
+  });
   saveMemories();
+  markAnalysisStale();
+  syncMemoriesToBridge({ silent: true });
   state.editor = false;
+  state.urgentAlert = m.urgentSignal;
   render();
-  notify("修改已保存");
-}
-
-function reanalyzeSelected() {
-  const m = state.memories.find(item => item.id === state.selectedId);
-  if (!m) return;
-  Object.assign(m, analyze(m.text));
-  saveMemories();
-  render();
-  notify("已重新分析");
+  if (!m.urgentSignal) notify("修改已保存");
 }
 
 function deleteSelected() {
@@ -503,6 +583,8 @@ function confirmDeleteSelected() {
   if (!m) return;
   state.memories = state.memories.filter(item => item.id !== m.id);
   saveMemories();
+  markAnalysisStale();
+  syncMemoriesToBridge({ silent: true });
   state.deleteConfirm = false;
   go("stream");
   notify("记忆已删除");
@@ -511,7 +593,7 @@ function confirmDeleteSelected() {
 async function shareSelected() {
   const m = state.memories.find(item => item.id === state.selectedId);
   if (!m) return;
-  const text = `${chineseDate(new Date(m.createdAt))} ${formatTime(m.createdAt)} · ${tagText(m)}\n\n${m.text}\n\n✦ ${m.insightLabel}：${m.insight}`;
+  const text = `${chineseDate(new Date(m.createdAt))} ${formatTime(m.createdAt)} · ${tagText(m)}${m.topic ? ` · ${m.topic}` : ""}\n\n${m.text}`;
   if (navigator.share) {
     try { await navigator.share({ title:"人生海海 · 一条记忆", text }); } catch {}
   } else {
@@ -561,7 +643,7 @@ function stopSpeech() {
 
 function exportMarkdown() {
   const grouped = groupByDay(state.memories);
-  const md = grouped.map(group => `# ${chineseDate(new Date(group.day))}\n\n${group.items.sort(byOldest).map(m => `- ${formatTime(m.createdAt)} [${tagText(m)}] ${m.text}\n  - ${m.warning ? "⚠️" : "✦"} ${m.insightLabel}：${m.insight}`).join("\n")}`).join("\n\n---\n\n");
+  const md = grouped.map(group => `# ${chineseDate(new Date(group.day))}\n\n${group.items.sort(byOldest).map(m => `- ${formatTime(m.createdAt)} [${tagText(m)}${m.topic ? ` / ${m.topic}` : ""}] ${m.text}`).join("\n")}`).join("\n\n---\n\n");
   const blob = new Blob([md], { type:"text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -585,9 +667,10 @@ async function createEncryptedBackup() {
     const key = await deriveBackupKey(password, salt, ["encrypt"]);
     const payload = new TextEncoder().encode(JSON.stringify({
       format: "rensheng-haihai-data",
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
-      memories: state.memories
+      memories: state.memories,
+      holisticAnalysis: state.holisticAnalysis
     }));
     const encrypted = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(BACKUP_AAD) },
@@ -641,7 +724,7 @@ async function restoreEncryptedBackup() {
       base64ToBytes(envelope.ciphertext)
     );
     const payload = JSON.parse(new TextDecoder().decode(plain));
-    if (payload?.format !== "rensheng-haihai-data" || payload?.version !== 1 || !Array.isArray(payload.memories)) {
+    if (payload?.format !== "rensheng-haihai-data" || ![1, 2].includes(payload?.version) || !Array.isArray(payload.memories)) {
       throw new Error("invalid payload");
     }
     const restored = payload.memories.map(normalizeBackupMemory).filter(Boolean);
@@ -649,6 +732,13 @@ async function restoreEncryptedBackup() {
       ? restored.sort(byNewest)
       : mergeMemories(state.memories, restored);
     saveMemories();
+    if (payload.holisticAnalysis && typeof payload.holisticAnalysis === "object") {
+      state.holisticAnalysis = payload.holisticAnalysis;
+      localStorage.setItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+    } else {
+      markAnalysisStale();
+    }
+    syncMemoriesToBridge({ silent: true });
     state.protectionMode = null;
     state.pendingRestoreFile = null;
     state.view = "stream";
@@ -712,25 +802,21 @@ function validateBackupEnvelope(envelope) {
 
 function normalizeBackupMemory(item) {
   if (!item || typeof item.text !== "string" || !item.text.trim()) return null;
-  const kind = ["person", "event", "content"].includes(item.kind) ? item.kind : "content";
   const createdAt = Number.isNaN(Date.parse(item.createdAt)) ? new Date().toISOString() : item.createdAt;
+  const archive = classifyMemory(item.text.trim());
   return {
     id: typeof item.id === "string" && item.id ? item.id : (crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`),
     text: item.text.trim(),
     createdAt,
     source: item.source === "voice" ? "voice" : "text",
     seconds: Number.isFinite(item.seconds) ? Math.max(0, Math.round(item.seconds)) : 0,
-    kind,
-    subject: typeof item.subject === "string" ? item.subject : null,
-    insight: typeof item.insight === "string" ? item.insight : "",
-    insightLabel: typeof item.insightLabel === "string" ? item.insightLabel : "",
-    warning: Boolean(item.warning),
-    lenses: Array.isArray(item.lenses) ? item.lenses.map(lens => ({
-      title: typeof lens?.title === "string" ? lens.title : "分析",
-      body: typeof lens?.body === "string" ? lens.body : "",
-      tone: ["person", "event", "content", "warn"].includes(lens?.tone) ? lens.tone : "content",
-      badge: typeof lens?.badge === "string" ? lens.badge : null
-    })) : []
+    ...archive,
+    urgentSignal: detectUrgentSignal(item.text),
+    insight: "",
+    insightLabel: "",
+    warning: false,
+    lenses: [],
+    archiveVersion: ARCHIVE_VERSION
   };
 }
 
@@ -779,19 +865,344 @@ async function checkForUpdate() {
   }
 }
 
-function computeStats() {
-  const recent = state.memories.filter(m => daysAgo(m.createdAt) <= 14);
-  const selfDays = new Set(recent.filter(m => m.kind === "person" && m.subject === "我").map(m => isoDay(new Date(m.createdAt)))).size;
-  const familyDays = new Set(recent.filter(m => m.kind === "person" && m.subject && m.subject !== "我").map(m => isoDay(new Date(m.createdAt)))).size;
-  const warnings = state.memories.filter(m => m.warning && daysAgo(m.createdAt) <= 21).slice(0,3).map(m => ({ title: m.subject === "我" ? "你的身体" : `${m.subject || "家人"}的健康`, detail:m.insight }));
-  const late = state.memories.filter(m => daysAgo(m.createdAt) <= 7 && new Date(m.createdAt).getHours() >= 23).length;
-  if (late >= 3) warnings.push({ title:"你的睡眠", detail:`近一周已有 ${late} 次记录在 23:00 后，方向有点偏。` });
-  const event = state.memories.filter(m => m.kind === "event").sort(byNewest)[0];
+function buildLocalOverview() {
+  const memories = state.memories.slice().sort(byNewest);
+  if (!memories.length) {
+    return {
+      source: "local",
+      periodLabel: "还没有记录",
+      overview: "先留下真实的日常。单条只归档，积累到一定数量后再寻找连续线索。",
+      people: [],
+      keySignals: [],
+      directions: []
+    };
+  }
+
+  const peopleMap = new Map();
+  memories.filter(item => item.kind === "person" && item.subject).forEach(item => {
+    const current = peopleMap.get(item.subject) || [];
+    current.push(item);
+    peopleMap.set(item.subject, current);
+  });
+  const people = [...peopleMap.entries()]
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([name, items]) => {
+      const topics = countValues(items.map(item => item.topic));
+      const topicNames = topics.slice(0, 2).map(([topic]) => topic);
+      return {
+        name,
+        count: items.length,
+        summary: topicNames.length
+          ? `记录集中在${topicNames.join("、")}。先保留连续变化，不从单条日常下结论。`
+          : "目前主要是日常片段，继续积累后再看变化。"
+      };
+    });
+
+  const topicCounts = countValues(memories.map(item => item.topic));
+  const leadingPerson = people[0];
+  const leadingTopic = topicCounts[0]?.[0];
+  const overview = leadingPerson
+    ? `现有 ${memories.length} 条记录主要围绕${leadingPerson.name}${leadingTopic ? `，其中“${leadingTopic}”最集中` : ""}。这些更适合作为连续观察线索，而不是逐条分析。`
+    : `现有 ${memories.length} 条记录以${leadingTopic || "日常片段"}为主。先看它们是否形成重复主题，再决定值得关注的方向。`;
+
+  const urgentSignals = memories
+    .filter(item => item.urgentSignal)
+    .slice(0, 3)
+    .map(item => ({
+      title: item.urgentSignal.title,
+      detail: `${item.urgentSignal.detail}（记录于 ${formatFullDate(item.createdAt)}）`,
+      level: "attention",
+      relatedMemoryIds: [item.id]
+    }));
+  const keySignals = [...urgentSignals];
+
+  const repeatedInterest = memories.filter(item => item.topic === "兴趣与探索");
+  if (repeatedInterest.length >= 2) {
+    const subject = repeatedInterest.find(item => item.subject)?.subject;
+    keySignals.push({
+      title: `${subject || "近期"}的兴趣出现了连续线索`,
+      detail: `已有 ${repeatedInterest.length} 条记录涉及兴趣、搭建或探索，可以继续观察主动选择和持续时间。`,
+      level: "positive",
+      relatedMemoryIds: repeatedInterest.map(item => item.id)
+    });
+  }
+
+  const repeatedHealth = memories.filter(item => item.topic === "健康");
+  if (repeatedHealth.length >= 2) {
+    keySignals.push({
+      title: "健康相关描述重复出现",
+      detail: `共有 ${repeatedHealth.length} 条记录提到身体或睡眠状况。这里只提示重复，不作诊断。`,
+      level: "observe",
+      relatedMemoryIds: repeatedHealth.map(item => item.id)
+    });
+  }
+
+  const directions = [];
+  if (repeatedInterest.length >= 2) {
+    const subject = repeatedInterest.find(item => item.subject)?.subject || "这个兴趣";
+    directions.push({
+      title: `继续观察${subject}的兴趣如何发展`,
+      why: "已经不是孤立的一次提及，但现有信息还不足以定义成长期偏好。",
+      nextStep: "下次只需记下：是否主动选择、持续多久、会不会自己搭建或讲述。",
+      horizon: "未来两周"
+    });
+  }
+  if (repeatedHealth.length >= 2) {
+    directions.push({
+      title: "把重复的健康描述放到同一条时间线上",
+      why: "时间、频率和是否持续，比单条文字更有判断价值。",
+      nextStep: "记录发生时间、持续多久及是否已经寻求专业帮助；不要让 App 代替诊断。",
+      horizon: "持续观察"
+    });
+  }
+  const eventItems = memories.filter(item => item.kind === "event");
+  if (eventItems.length >= 2) {
+    directions.push({
+      title: "把重要事情从记录变成可跟进节点",
+      why: "多条事情类记录适合比较进展、决定和未解决问题。",
+      nextStep: "后续记录时补一句“下一步是什么、何时再看”。",
+      horizon: "本周"
+    });
+  }
+  if (!directions.length) {
+    directions.push({
+      title: "继续留下自然、具体的片段",
+      why: "记录数量还少，过早总结容易把偶然当成规律。",
+      nextStep: "保持原话即可；出现重复主题后，再交给 Codex 做整体复盘。",
+      horizon: "先积累 1—2 周"
+    });
+  }
+
   return {
-    goals:[{ name:"自己的健康", value:Math.min(100, Math.round(selfDays / 14 * 100)) }, { name:"陪伴家人", value:Math.min(100, Math.round(familyDays / 14 * 100)) }],
-    warnings,
-    prediction:event ? { headline:event.text.slice(0,15) + (event.text.length > 15 ? "…" : ""), percent:Number(event.insight.match(/\d+/)?.[0] || 70), note:event.lenses.find(l => l.title === "模拟推演")?.body || event.insight } : null
+    source: "local",
+    periodLabel: formatMemoryPeriod(memories),
+    overview,
+    people,
+    keySignals: keySignals.slice(0, 4),
+    directions: directions.slice(0, 3)
   };
+}
+
+function countValues(values) {
+  const counts = new Map();
+  values.filter(Boolean).forEach(value => counts.set(value, (counts.get(value) || 0) + 1));
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function formatMemoryPeriod(memories) {
+  if (!memories.length) return "当前记忆";
+  const dates = memories.map(item => new Date(item.createdAt)).filter(date => !Number.isNaN(date.getTime())).sort((a, b) => a - b);
+  if (!dates.length) return `共 ${memories.length} 条记忆`;
+  const first = dates[0];
+  const last = dates[dates.length - 1];
+  const sameDay = isoDay(first) === isoDay(last);
+  const dateText = date => new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric" }).format(date);
+  return `${sameDay ? dateText(last) : `${dateText(first)}—${dateText(last)}`} · ${memories.length} 条记忆`;
+}
+
+function formatAnalysisTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "时间未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
+}
+
+function markAnalysisStale() {
+  if (!state.holisticAnalysis) return;
+  state.holisticAnalysis = { ...state.holisticAnalysis, stale: true };
+  localStorage.setItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+}
+
+async function saveCodexConnection() {
+  const token = document.querySelector("#codex-token")?.value.trim() || "";
+  const manualEndpoint = normalizeEndpoint(document.querySelector("#codex-endpoint")?.value || "");
+  if (!token) return notify("请填写连接码");
+  const button = document.querySelector("[data-save-codex]");
+  if (button) { button.disabled = true; button.textContent = "正在测试…"; }
+  const previous = state.codexConfig;
+  state.codexConfig = { token, endpoint: manualEndpoint || previous.endpoint || "" };
+  try {
+    if (!state.codexConfig.endpoint) await discoverBridgeEndpoint();
+    await bridgeFetch("/health", { timeout: 10000 });
+    localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(state.codexConfig));
+    await syncMemoriesToBridge({ silent: false });
+    state.codexMode = null;
+    render();
+    notify("已连接电脑上的 Codex");
+    pullLatestAnalysis({ silent: true });
+  } catch (error) {
+    state.codexConfig = previous;
+    console.error(error);
+    notify("连接失败，请确认电脑桥已启动");
+    if (button) { button.disabled = false; button.textContent = "保存并测试连接"; }
+  }
+}
+
+function disconnectCodex() {
+  state.codexConfig = { token: "", endpoint: "" };
+  localStorage.removeItem(CODEX_CONFIG_KEY);
+  state.codexMode = null;
+  render();
+  notify("已断开 Codex；手机记忆没有删除");
+}
+
+async function refreshHolisticAnalysis() {
+  if (state.codexBusy || !state.memories.length) return;
+  state.codexBusy = true;
+  render();
+  try {
+    await syncMemoriesToBridge({ silent: true });
+    const analysis = await bridgeFetch("/analyze", {
+      method: "POST",
+      body: JSON.stringify({ reason: "manual" }),
+      timeout: 180000
+    });
+    applyHolisticAnalysis(analysis);
+    notify("整体分析已更新");
+  } catch (error) {
+    console.error(error);
+    notify("Codex 暂时没有完成分析，请确认电脑在线");
+  } finally {
+    state.codexBusy = false;
+    render();
+  }
+}
+
+async function syncMemoriesToBridge({ silent = true } = {}) {
+  if (!state.codexConfig.token || !state.codexConfig.endpoint) return false;
+  try {
+    await bridgeFetch("/sync", {
+      method: "POST",
+      body: JSON.stringify({
+        memories: state.memories,
+        clientUpdatedAt: new Date().toISOString()
+      }),
+      timeout: 15000
+    });
+    if (!silent) notify(`已同步 ${state.memories.length} 条记忆到你的电脑`);
+    return true;
+  } catch (error) {
+    if (!silent) throw error;
+    console.warn("记忆同步暂时不可用", error);
+    return false;
+  }
+}
+
+async function pullLatestAnalysis({ silent = true } = {}) {
+  if (!state.codexConfig.token || !state.codexConfig.endpoint) return null;
+  try {
+    const analysis = await bridgeFetch("/analysis", { timeout: 10000 });
+    if (analysis?.overview) {
+      applyHolisticAnalysis(analysis);
+      return analysis;
+    }
+  } catch (error) {
+    if (!silent) throw error;
+  }
+  return null;
+}
+
+function applyHolisticAnalysis(analysis) {
+  if (!analysis || typeof analysis.overview !== "string") throw new Error("invalid analysis");
+  const classifications = Array.isArray(analysis.classifications) ? analysis.classifications : [];
+  if (classifications.length) {
+    const byId = new Map(classifications.map(item => [item.id, item]));
+    state.memories = state.memories.map(memoryItem => {
+      const next = byId.get(memoryItem.id);
+      if (!next || !["person", "event", "content"].includes(next.kind)) return memoryItem;
+      return {
+        ...memoryItem,
+        kind: next.kind,
+        subject: typeof next.subject === "string" && next.subject ? next.subject : null,
+        topic: typeof next.topic === "string" && next.topic ? next.topic : memoryItem.topic,
+        archiveVersion: ARCHIVE_VERSION
+      };
+    });
+    saveMemories();
+  }
+  state.holisticAnalysis = {
+    ...analysis,
+    source: "codex",
+    stale: false,
+    generatedAt: analysis.generatedAt || new Date().toISOString(),
+    memoryCount: Number.isFinite(analysis.memoryCount) ? analysis.memoryCount : state.memories.length
+  };
+  localStorage.setItem(HOLISTIC_ANALYSIS_KEY, JSON.stringify(state.holisticAnalysis));
+}
+
+async function bridgeFetch(path, options = {}) {
+  if (!state.codexConfig.endpoint) await discoverBridgeEndpoint();
+  let endpoint = normalizeEndpoint(state.codexConfig.endpoint);
+  if (!endpoint) throw new Error("missing endpoint");
+  try {
+    return await performBridgeFetch(endpoint, path, options);
+  } catch (firstError) {
+    const previousEndpoint = endpoint;
+    await discoverBridgeEndpoint();
+    endpoint = normalizeEndpoint(state.codexConfig.endpoint);
+    if (!endpoint || endpoint === previousEndpoint) throw firstError;
+    return performBridgeFetch(endpoint, path, options);
+  }
+}
+
+async function performBridgeFetch(endpoint, path, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeout || 15000);
+  try {
+    const response = await fetch(`${endpoint}${path}`, {
+      method: options.method || "GET",
+      headers: {
+        "Authorization": `Bearer ${state.codexConfig.token}`,
+        ...(options.body ? { "Content-Type": "application/json" } : {})
+      },
+      body: options.body,
+      signal: controller.signal,
+      cache: "no-store"
+    });
+    if (response.status === 204) return null;
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(data?.error || `bridge ${response.status}`);
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeEndpoint(value) {
+  const trimmed = String(value || "").trim().replace(/\/+$/, "");
+  if (!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(trimmed) && !/^http:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/i.test(trimmed)) return "";
+  return trimmed;
+}
+
+async function discoverBridgeEndpoint() {
+  try {
+    const response = await fetch(`./bridge.json?ts=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return "";
+    const data = await response.json();
+    const endpoint = normalizeEndpoint(data?.endpoint || "");
+    if (!endpoint) return "";
+    if (state.codexConfig.endpoint !== endpoint) {
+      state.codexConfig = { ...state.codexConfig, endpoint };
+      localStorage.setItem(CODEX_CONFIG_KEY, JSON.stringify(state.codexConfig));
+    }
+    return endpoint;
+  } catch {
+    return "";
+  }
+}
+
+async function hydrateCodexState() {
+  if (!state.codexConfig.token) return;
+  await discoverBridgeEndpoint();
+  if (!state.codexConfig.endpoint) return;
+  await syncMemoriesToBridge({ silent: true });
+  const analysis = await pullLatestAnalysis({ silent: true });
+  if (analysis && state.view === "summary") render();
 }
 
 function groupByDay(memories) {
@@ -848,3 +1259,4 @@ if ("serviceWorker" in navigator) {
   });
 }
 render();
+hydrateCodexState();

@@ -1,10 +1,11 @@
-const CACHE = "rensheng-haihai-v6";
+const CACHE = "rensheng-haihai-v7";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css",
-  "./app.js",
+  "./styles.css?v=1.3.0",
+  "./app.js?v=1.3.0",
   "./manifest.webmanifest",
+  "./bridge.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/apple-touch-icon.png"

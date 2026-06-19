@@ -1,7 +1,7 @@
 {
   "name": "人生海海 · 时间记忆流",
   "short_name": "人生海海",
-  "description": "只属于你的离线时间记忆流。",
+  "description": "单条轻量归档，全部记忆由你电脑上的 Codex 定期整体整理。",
   "lang": "zh-CN",
   "start_url": "./",
   "scope": "./",
