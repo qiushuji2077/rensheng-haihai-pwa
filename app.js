@@ -1,5 +1,18 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
+const SAMPLE_TEXTS = new Set([
+  "六点自然醒，没赖床。煮了咖啡，看着窗外的雨，想起十年前在厦门看海的那个清晨。",
+  "和妈妈通了电话，她说膝盖最近又疼了，但不肯去医院。我有点担心，又不知道怎么劝她。",
+  "中午跑了五公里，比上周快了二十秒。身体在慢慢变好。",
+  "项目还悬着。客户说下周给答复，我猜他们是想压价。",
+  "读到一句话：「人生海海，敢死不叫勇敢，活着才需要勇气。」记下来。",
+  "又熬到半夜才睡，明明说好十一点的。",
+  "陪老婆去了趟菜场，买了她爱吃的那条鱼。",
+  "改方案改到现在，眼睛很干，肩也僵。",
+  "睡前又刷手机刷了一个多小时，停不下来。",
+  "给妈妈寄了副护膝，不知道她会不会嫌麻烦。",
+  "搬家的事基本定了，下个月十五号。"
+]);
 
 const kinds = {
   person: { label: "人", color: "#c16a4e", facets: ["健康", "人生规划", "发现"], icon: "人" },
@@ -35,40 +48,25 @@ let state = {
 
 function loadMemories() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (Array.isArray(saved) && saved.length) return saved;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw !== null) {
+      const saved = JSON.parse(raw);
+      if (Array.isArray(saved)) {
+        const cleaned = saved.filter(item => !SAMPLE_TEXTS.has(item.text));
+        if (cleaned.length !== saved.length) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
+        }
+        return cleaned;
+      }
+    }
   } catch {}
-  const seeded = seedMemories();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(seeded));
-  return seeded;
+  localStorage.setItem(STORAGE_KEY, "[]");
+  return [];
 }
 
 function saveMemories() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state.memories));
 }
-
-function seedMemories() {
-  const at = (daysAgo, hour, minute) => {
-    const date = new Date();
-    date.setDate(date.getDate() - daysAgo);
-    date.setHours(hour, minute, 0, 0);
-    return date.toISOString();
-  };
-  return [
-    memory("六点自然醒，没赖床。煮了咖啡，看着窗外的雨，想起十年前在厦门看海的那个清晨。", at(0,6,10), "content"),
-    memory("和妈妈通了电话，她说膝盖最近又疼了，但不肯去医院。我有点担心，又不知道怎么劝她。", at(0,8,30), "person", "妈妈"),
-    memory("中午跑了五公里，比上周快了二十秒。身体在慢慢变好。", at(0,12,40), "person", "我"),
-    memory("项目还悬着。客户说下周给答复，我猜他们是想压价。", at(0,15,20), "event"),
-    memory("读到一句话：「人生海海，敢死不叫勇敢，活着才需要勇气。」记下来。", at(0,23,10), "content"),
-    memory("又熬到半夜才睡，明明说好十一点的。", at(1,23,40), "person", "我"),
-    memory("陪老婆去了趟菜场，买了她爱吃的那条鱼。", at(2,19,10), "person", "老婆"),
-    memory("改方案改到现在，眼睛很干，肩也僵。", at(2,23,20), "person", "我"),
-    memory("睡前又刷手机刷了一个多小时，停不下来。", at(3,23,35), "person", "我"),
-    memory("给妈妈寄了副护膝，不知道她会不会嫌麻烦。", at(4,10,0), "person", "妈妈"),
-    memory("搬家的事基本定了，下个月十五号。", at(5,14,0), "event")
-  ];
-}
-
 function memory(text, createdAt = new Date().toISOString(), forcedKind, forcedSubject) {
   let analysis = analyze(text);
   if (forcedKind === "person" && analysis.kind !== "person") {
@@ -518,7 +516,7 @@ function groupByDay(memories) {
     if (!map.has(day)) map.set(day, []);
     map.get(day).push(m);
   });
-  return [...map].map(([day, items]) => ({ day:`${day}T00:00:00`, items:items.sort(byOldest) }));
+  return [...map].map(([day, items]) => ({ day:`${day}T00:00:00`, items:items.sort(byNewest) }));
 }
 
 function tag(m) { return `<span class="tag ${m.kind}">${escapeHTML(tagText(m))}</span>`; }
