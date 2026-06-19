@@ -735,3 +735,10 @@ button { cursor: pointer; }
 .subject-input { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid rgba(43,39,34,.12); border-radius: 10px; font-size: 14px; background: #fff; color: var(--ink, #2b2722); margin-bottom: 8px; }
 .subject-input:focus { outline: none; border-color: var(--teal, #2e6e73); }
 .classifier-note { font-size: 12px; color: var(--ghost, #a89f90); margin: 0; line-height: 1.5; }
+
+/* 分类页 · 人物/主题时间线入口 */
+.subject-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.topic-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.lens-all { margin-top: 12px; width: 100%; border: 0; background: rgba(43,39,34,.05); color: var(--teal, #2e6e73); border-radius: 10px; padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.lens-all:active { background: rgba(43,39,34,.09); }
+.people-lines article { cursor: pointer; }

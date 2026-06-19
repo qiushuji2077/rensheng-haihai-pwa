@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.4.0";
+const APP_VERSION = "1.4.1";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -44,6 +44,8 @@ const toast = document.querySelector("#toast");
 let state = {
   view: sessionStorage.getItem(VIEW_KEY) || "stream",
   selectedId: null,
+  facet: null,
+  facetBack: "lenses",
   search: "",
   scope: "all",
   composer: false,
@@ -330,11 +332,22 @@ function openMemory(id) {
   window.scrollTo(0, 0);
 }
 
+function openFacet(type, value) {
+  if (!value) return;
+  if (state.view !== "facet") state.facetBack = state.view;   // 记住从哪进来的
+  state.facet = { type, value };
+  state.view = "facet";
+  state.selectedId = null;
+  render();
+  window.scrollTo(0, 0);
+}
+
 function render() {
   const views = {
     stream: renderStream,
     search: renderSearch,
     lenses: renderLenses,
+    facet: renderFacet,
     summary: renderSummary,
     detail: renderDetail
   };
@@ -410,12 +423,21 @@ function renderSearch() {
 function renderLenses() {
   const cards = Object.entries(kinds).map(([kind, meta]) => {
     const items = state.memories.filter(m => m.kind === kind);
-    const subjects = [...new Set(items.map(m => m.subject).filter(Boolean))].slice(0,4);
+    const subjects = [...new Set(items.map(m => m.subject).filter(Boolean))];
+    const head = subjects.slice(0, 4);
+    const body = kind === "person" && subjects.length
+      ? `<div class="subject-chips">${subjects.slice(0, 12).map(s => `<button class="chip" data-subject="${escapeAttr(s)}">${escapeHTML(s)}</button>`).join("")}</div>`
+      : `<div class="facet-list">${meta.facets.map(x => `<span>${x}</span>`).join("")}</div>`;
     return `<section class="overview-card" style="--accent:${meta.color}">
-      <div class="overview-head"><div class="overview-icon">${meta.icon}</div><div class="overview-copy"><strong>${meta.label}</strong><span>${items.length} 条${subjects.length ? ` · ${subjects.join("、")}` : "记忆"}</span></div></div>
-      <div class="facet-list">${meta.facets.map(x => `<span>${x}</span>`).join("")}</div>
+      <div class="overview-head"><div class="overview-icon">${meta.icon}</div><div class="overview-copy"><strong>${meta.label}</strong><span>${items.length} 条${head.length ? ` · ${head.join("、")}` : "记忆"}</span></div></div>
+      ${body}
+      ${items.length ? `<button class="lens-all" data-kind="${kind}">查看全部 ${items.length} 条 →</button>` : ""}
     </section>`;
   }).join("");
+  const topicCounts = [...state.memories.reduce((map, m) => { const t = m.topic || "日常"; map.set(t, (map.get(t) || 0) + 1); return map; }, new Map())].sort((a, b) => b[1] - a[1]);
+  const topicsBlock = topicCounts.length
+    ? `<div class="section-label">主题</div><div class="topic-chips">${topicCounts.map(([t, c]) => `<button class="chip" data-topic="${escapeAttr(t)}">${escapeHTML(t)} ${c}</button>`).join("")}</div>`
+    : "";
   const today = state.memories.filter(m => isToday(m.createdAt)).sort(byOldest);
   const preview = `~/记忆/${isoDay(new Date())}.md\n# ${chineseDate(new Date())}\n${today.slice(0,3).map(m => `- ${formatTime(m.createdAt)} [${tagText(m)}] ${m.text.slice(0,10)}${m.text.length > 10 ? "…" : ""}`).join("\n") || "- 今天还没有记录…"}`;
   return `<section class="screen">
@@ -424,7 +446,28 @@ function renderLenses() {
       <p class="eyebrow">三种归档 · ARCHIVE</p>
       <h1 class="display-title">先分清，再整体理解</h1>
       ${cards}
+      ${topicsBlock}
       <section class="md-card"><div class="md-head"><span class="md-mark">md</span>本地记录 · 离线也在写</div><pre class="md-preview">${escapeHTML(preview)}</pre><p>Markdown 方便阅读；加密备份才能完整恢复全部记忆与分析。</p><div class="md-actions"><button class="action-button" data-protect>加密备份</button><button class="action-button" data-export>导出 Markdown</button></div></section>
+    </div>
+  </section>`;
+}
+
+function renderFacet() {
+  const f = state.facet || {};
+  const items = state.memories.filter(m =>
+    f.type === "subject" ? m.subject === f.value
+    : f.type === "topic" ? (m.topic || "日常") === f.value
+    : m.kind === f.value
+  ).sort(byNewest);
+  const title = f.type === "kind" ? (kinds[f.value]?.label || "分类") : f.value;
+  const label = f.type === "subject" ? "人物" : f.type === "topic" ? "主题" : "分类";
+  const groups = groupByDay(items);
+  return `<section class="screen">
+    ${topbar(title, state.facetBack || "lenses")}
+    <div class="content-pad">
+      <p class="eyebrow">${label} · 时间线</p>
+      <p class="result-label">共 ${items.length} 条相关记忆</p>
+      <div class="stream">${groups.length ? groups.map((g, i) => `${i ? `<div class="day-label">${chineseDate(new Date(g.day))} · ${weekday(new Date(g.day))}</div>` : ""}<div class="timeline">${g.items.map(renderTimelineCard).join("")}</div>`).join("") : renderEmpty("还没有相关记忆", "换一个看看。")}</div>
     </div>
   </section>`;
 }
@@ -442,7 +485,7 @@ function renderSummary() {
         <p class="direction-quote">「${escapeHTML(analysis.overview)}」</p>
         <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 Codex 更新整体分析" : "连接 Codex 进行整体分析"}</button>
       </section>
-      ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
+      ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article data-subject="${escapeAttr(person.name)}"><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
       ${analysis.keySignals?.length ? `<div class="section-label">值得留意</div>${analysis.keySignals.map(signal => `<article class="warning-row ${signal.level === "attention" ? "" : "gold"}"><span>${signal.level === "attention" ? "▲" : "✦"}</span><div><strong>${escapeHTML(signal.title)}</strong><p>${escapeHTML(signal.detail)}</p></div></article>`).join("")}` : ""}
       ${analysis.directions?.length ? `<div class="section-label">下一步方向</div><div class="direction-list">${analysis.directions.map(item => `<article><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.why)}</p><div>${escapeHTML(item.nextStep)}</div><span>${escapeHTML(item.horizon || "接下来")}</span></article>`).join("")}</div>` : ""}
       <p class="privacy-note">${analysis.source === "codex" ? `由 Codex 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接电脑：记忆先加密同步到电脑本地；做整体分析时，会把记忆交给电脑上登录的 Codex（云端模型）处理" : "当前未连接 Codex，记忆只在这台设备本地保存与分析"}</p>
@@ -625,6 +668,9 @@ function bindEvents() {
   const search = document.querySelector("#search-input");
   search?.addEventListener("input", e => { state.search = e.target.value; render(); document.querySelector("#search-input")?.focus(); });
   document.querySelectorAll("[data-scope]").forEach(el => el.addEventListener("click", () => { state.scope = el.dataset.scope; render(); }));
+  document.querySelectorAll("[data-subject]").forEach(el => el.addEventListener("click", () => openFacet("subject", el.dataset.subject)));
+  document.querySelectorAll("[data-topic]").forEach(el => el.addEventListener("click", () => openFacet("topic", el.dataset.topic)));
+  document.querySelectorAll("[data-kind]").forEach(el => el.addEventListener("click", () => openFacet("kind", el.dataset.kind)));
 
   const composer = document.querySelector("#composer-text");
   const saveButton = document.querySelector("[data-save-memory]");
