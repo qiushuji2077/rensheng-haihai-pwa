@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.3.2";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -254,9 +254,31 @@ function classifyMemory(text) {
     [["儿子","男孩"],"儿子"], [["女儿","女孩"],"女儿"],
     [["孩子","小孩","宝宝","娃"],"孩子"], [["朋友","同学","同事","闺蜜"],"朋友"]
   ];
-  const event = ["项目","工作","会议","客户","谈判","合同","方案","搬家","计划","任务","面试","预算","决定","报价","上线","发布"].some(w => text.includes(w));
-  const subject = relations.find(([keys]) => keys.some(k => text.includes(k)))?.[1] || (text.includes("我") && !event ? "我" : null);
-  const kind = subject ? "person" : event ? "event" : "content";
+  const has = list => list.some(w => text.includes(w));
+
+  // 1) 明确提到他人 → 人（涉及具体人物优先）
+  const other = relations.find(([keys]) => keys.some(k => text.includes(k)))?.[1] || null;
+
+  // 2) 事务信号 → 事
+  const eventSignal = has(["项目","工作","上班","会议","开会","客户","谈判","合同","方案","搬家",
+    "计划","任务","面试","预算","决定","报价","上线","发布","出差","加班","考试","比赛","装修",
+    "租房","买房","投资","股票","工资","账单","报销","截止","deadline","签约"]);
+
+  // 3) 关于自己身心的记录（跑步/睡眠/情绪/体检…）→ 人·我
+  const selfSignal = text.includes("我") && has(["跑","健身","锻炼","散步","睡","失眠","累","瘦","胖",
+    "体检","身体","生病","情绪","焦虑","开心","难过","压力","心情","状态","早起","熬夜","减肥","习惯"]);
+
+  // 4) 引用/阅读/想法/灵感 → 内容（即使句中有“我”，也压过裸“我”）
+  const contentSignal = has(["「","」","“","”","\"","『","』","读到","看到一句","摘抄","引用","想起",
+    "想法","灵感","感悟","名言","句子","这句","一段话","书","小说","文章","诗","电影","纪录片","播客","觉得"]);
+
+  let kind, subject = null;
+  if (other) { kind = "person"; subject = other; }
+  else if (eventSignal) { kind = "event"; }
+  else if (selfSignal) { kind = "person"; subject = "我"; }
+  else if (contentSignal) { kind = "content"; }
+  else { kind = "content"; }   // 默认归内容，而不是“人·我”
+
   return { kind, subject, topic: detectTopic(text) };
 }
 
