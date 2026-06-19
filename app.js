@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.5.0";
+const APP_VERSION = "1.5.1";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
