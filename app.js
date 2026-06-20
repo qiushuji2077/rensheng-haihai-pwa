@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.5.1";
+const APP_VERSION = "1.5.2";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -61,6 +61,7 @@ let state = {
   codexBusy: false,
   pendingRestoreFile: null,
   restoreStrategy: "merge",
+  restoreKind: null,
   recording: false,
   recognition: null,
   memories: loadMemories(),
@@ -680,11 +681,12 @@ function renderProtection() {
     <button class="icon-button" data-close style="margin-left:auto">✕</button>
     <div class="protection-symbol">${icons.shield}</div>
     <h2>记忆保护</h2>
-    <p>备份在手机本地加密完成。密码和记忆都不会上传。</p>
+    <p>备份在手机本地完成，记忆不会上传到我们的服务器。</p>
     <div class="backup-status ${backupDue() ? "due" : ""}"><span>${backupDue() ? "!" : "✓"}</span><div><strong>${status}</strong><small>${backupDue() ? "建议现在备份一次" : "建议每周备份一次"}</small></div></div>
     <div class="protection-actions">
-      <button class="protection-action primary" data-backup-create ${state.memories.length ? "" : "disabled"}><span>↓</span><div><strong>创建加密备份</strong><small>保存到“文件”或 iCloud Drive</small></div></button>
-      <label class="protection-action"><span>↑</span><div><strong>恢复加密备份</strong><small>从 .haihai 文件恢复</small></div><input id="restore-file" type="file" accept=".haihai,application/json" hidden /></label>
+      <button class="protection-action primary" data-backup-quick ${state.memories.length ? "" : "disabled"}><span>☁</span><div><strong>一键备份到 iCloud</strong><small>免密码 · 推荐日常使用</small></div></button>
+      <button class="protection-action" data-backup-create ${state.memories.length ? "" : "disabled"}><span>🔒</span><div><strong>创建加密备份</strong><small>设密码 · 文件泄露也打不开</small></div></button>
+      <label class="protection-action"><span>↑</span><div><strong>恢复备份</strong><small>从 .json 或 .haihai 文件恢复</small></div><input id="restore-file" type="file" hidden /></label>
     </div>
     <button class="plain-link" data-install>如何安装到主屏幕</button>
     <div class="version-line"><span>版本 ${APP_VERSION}</span><button data-check-update>检查更新</button></div>
@@ -704,16 +706,24 @@ function renderCreateBackup() {
 }
 
 function renderRestoreBackup() {
+  const kind = state.restoreKind;
+  const unknown = kind === "unknown";
+  const encrypted = kind === "encrypted";
+  const detail = unknown
+    ? `<div class="privacy-box"><strong>认不出这个文件</strong><span>请选择人生海海导出的 .json 或 .haihai 备份文件。</span></div>`
+    : encrypted
+      ? `<label class="field-label">备份密码<input id="restore-password" class="secure-field" type="password" autocomplete="current-password" placeholder="输入创建备份时的密码" /></label>`
+      : `<div class="privacy-box"><strong>免密码备份</strong><span>这是 iCloud 快速备份，直接恢复即可。</span></div>`;
   return `<div class="modal"><section class="modal-panel install-sheet protection-sheet">
     <button class="icon-button" data-protect-home aria-label="返回">${icons.back}</button>
-    <h2>恢复加密备份</h2>
+    <h2>恢复备份</h2>
     <p class="file-name">已选择：${escapeHTML(state.pendingRestoreFile?.name || "备份文件")}</p>
-    <label class="field-label">备份密码<input id="restore-password" class="secure-field" type="password" autocomplete="current-password" placeholder="输入创建备份时的密码" /></label>
+    ${detail}
     <div class="restore-options">
       <button class="restore-option ${state.restoreStrategy === "merge" ? "active" : ""}" data-restore-strategy="merge"><strong>合并恢复 · 推荐</strong><span>保留当前记忆，只补回缺少的内容</span></button>
       <button class="restore-option danger ${state.restoreStrategy === "replace" ? "active" : ""}" data-restore-strategy="replace"><strong>替换全部</strong><span>用备份内容覆盖这台手机的全部记忆</span></button>
     </div>
-    <button class="wide-primary" data-restore-encrypted>解密并恢复</button>
+    <button class="wide-primary" data-restore-run ${unknown ? "disabled" : ""}>${encrypted ? "解密并恢复" : "恢复"}</button>
   </section></div>`;
 }
 
@@ -723,20 +733,22 @@ function bindEvents() {
   document.querySelector("[data-compose]")?.addEventListener("click", () => { state.composer = true; render(); setTimeout(() => document.querySelector("#composer-text")?.focus(), 80); });
   document.querySelector("[data-install]")?.addEventListener("click", () => { state.installHelp = true; render(); });
   document.querySelectorAll("[data-protect]").forEach(el => el.addEventListener("click", () => { state.protectionMode = "home"; render(); }));
-  document.querySelector("[data-protect-home]")?.addEventListener("click", () => { state.protectionMode = "home"; state.pendingRestoreFile = null; render(); });
+  document.querySelector("[data-protect-home]")?.addEventListener("click", () => { state.protectionMode = "home"; state.pendingRestoreFile = null; state.restoreKind = null; render(); });
+  document.querySelector("[data-backup-quick]")?.addEventListener("click", createQuickBackup);
   document.querySelector("[data-backup-create]")?.addEventListener("click", () => { state.protectionMode = "create"; render(); setTimeout(() => document.querySelector("#backup-password")?.focus(), 80); });
-  document.querySelector("#restore-file")?.addEventListener("change", event => {
+  document.querySelector("#restore-file")?.addEventListener("change", async event => {
     const file = event.target.files?.[0];
     if (!file) return;
     state.pendingRestoreFile = file;
     state.restoreStrategy = "merge";
+    state.restoreKind = await detectBackupKind(file);
     state.protectionMode = "restore";
     render();
-    setTimeout(() => document.querySelector("#restore-password")?.focus(), 80);
+    if (state.restoreKind === "encrypted") setTimeout(() => document.querySelector("#restore-password")?.focus(), 80);
   });
   document.querySelectorAll("[data-restore-strategy]").forEach(el => el.addEventListener("click", () => { state.restoreStrategy = el.dataset.restoreStrategy; render(); }));
   document.querySelector("[data-create-encrypted]")?.addEventListener("click", createEncryptedBackup);
-  document.querySelector("[data-restore-encrypted]")?.addEventListener("click", restoreEncryptedBackup);
+  document.querySelector("[data-restore-run]")?.addEventListener("click", restoreBackup);
   document.querySelector("[data-check-update]")?.addEventListener("click", checkForUpdate);
   document.querySelectorAll("[data-close]").forEach(el => el.addEventListener("click", closeModal));
   document.querySelector("[data-overlay]")?.addEventListener("click", e => { if (e.target === e.currentTarget) closeModal(); });
@@ -789,6 +801,7 @@ function closeModal() {
   state.protectionMode = null;
   state.codexMode = null;
   state.pendingRestoreFile = null;
+  state.restoreKind = null;
   render();
 }
 
@@ -940,6 +953,39 @@ function exportMarkdown() {
   notify("Markdown 已导出");
 }
 
+function backupPayload() {
+  return {
+    format: "rensheng-haihai-data",
+    version: 2,
+    exportedAt: new Date().toISOString(),
+    memories: state.memories,
+    holisticAnalysis: state.holisticAnalysis
+  };
+}
+
+async function createQuickBackup() {
+  if (!state.memories.length) return notify("暂无记忆需要备份");
+  const button = document.querySelector("[data-backup-quick]");
+  if (button) button.disabled = true;
+  try {
+    const file = new File(
+      [JSON.stringify(backupPayload())],
+      `人生海海-备份-${isoDay(new Date())}.json`,
+      { type: "application/json" }
+    );
+    await saveBackupFile(file);
+    localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
+    state.protectionMode = "home";
+    render();
+    notify("快速备份已保存到 iCloud / 文件");
+  } catch (error) {
+    if (button) button.disabled = false;
+    if (error?.name === "AbortError") return;
+    console.error(error);
+    notify("备份失败，请稍后重试");
+  }
+}
+
 async function createEncryptedBackup() {
   const password = document.querySelector("#backup-password")?.value || "";
   const confirmPassword = document.querySelector("#backup-confirm")?.value || "";
@@ -953,13 +999,7 @@ async function createEncryptedBackup() {
     const salt = crypto.getRandomValues(new Uint8Array(16));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const key = await deriveBackupKey(password, salt, ["encrypt"]);
-    const payload = new TextEncoder().encode(JSON.stringify({
-      format: "rensheng-haihai-data",
-      version: 2,
-      exportedAt: new Date().toISOString(),
-      memories: state.memories,
-      holisticAnalysis: state.holisticAnalysis
-    }));
+    const payload = new TextEncoder().encode(JSON.stringify(backupPayload()));
     const encrypted = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(BACKUP_AAD) },
       key,
@@ -991,6 +1031,60 @@ async function createEncryptedBackup() {
   }
 }
 
+async function detectBackupKind(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    if (data?.format === BACKUP_FORMAT) return "encrypted";
+    if (data?.format === "rensheng-haihai-data" && Array.isArray(data?.memories)) return "plain";
+  } catch (error) {
+    console.error(error);
+  }
+  return "unknown";
+}
+
+function restoreBackup() {
+  if (!state.pendingRestoreFile) return notify("请重新选择备份文件");
+  return state.restoreKind === "encrypted" ? restoreEncryptedBackup() : restorePlainBackup();
+}
+
+function applyRestoredPayload(payload) {
+  if (payload?.format !== "rensheng-haihai-data" || ![1, 2].includes(payload?.version) || !Array.isArray(payload.memories)) {
+    throw new Error("invalid payload");
+  }
+  const restored = payload.memories.map(normalizeBackupMemory).filter(Boolean);
+  state.memories = state.restoreStrategy === "replace"
+    ? restored.sort(byNewest)
+    : mergeMemories(state.memories, restored);
+  saveMemories();
+  if (payload.holisticAnalysis && typeof payload.holisticAnalysis === "object") {
+    state.holisticAnalysis = payload.holisticAnalysis;
+    persistHolistic();
+  } else {
+    markAnalysisStale();
+  }
+  syncMemoriesToBridge({ silent: true });
+  state.protectionMode = null;
+  state.pendingRestoreFile = null;
+  state.restoreKind = null;
+  state.view = "stream";
+  render();
+  notify(`已恢复 ${restored.length} 条记忆`);
+}
+
+async function restorePlainBackup() {
+  const file = state.pendingRestoreFile;
+  if (!file) return notify("请重新选择备份文件");
+  const button = document.querySelector("[data-restore-run]");
+  if (button) { button.disabled = true; button.textContent = "正在恢复…"; }
+  try {
+    applyRestoredPayload(JSON.parse(await file.text()));
+  } catch (error) {
+    console.error(error);
+    notify("无法恢复：文件已损坏或格式不正确");
+    if (button) { button.disabled = false; button.textContent = "恢复"; }
+  }
+}
+
 async function restoreEncryptedBackup() {
   const password = document.querySelector("#restore-password")?.value || "";
   const file = state.pendingRestoreFile;
@@ -998,7 +1092,7 @@ async function restoreEncryptedBackup() {
   if (!password) return notify("请输入备份密码");
   if (!window.crypto?.subtle) return notify("当前浏览器不支持安全解密");
 
-  const button = document.querySelector("[data-restore-encrypted]");
+  const button = document.querySelector("[data-restore-run]");
   if (button) { button.disabled = true; button.textContent = "正在恢复…"; }
   try {
     const envelope = JSON.parse(await file.text());
@@ -1011,27 +1105,7 @@ async function restoreEncryptedBackup() {
       key,
       base64ToBytes(envelope.ciphertext)
     );
-    const payload = JSON.parse(new TextDecoder().decode(plain));
-    if (payload?.format !== "rensheng-haihai-data" || ![1, 2].includes(payload?.version) || !Array.isArray(payload.memories)) {
-      throw new Error("invalid payload");
-    }
-    const restored = payload.memories.map(normalizeBackupMemory).filter(Boolean);
-    state.memories = state.restoreStrategy === "replace"
-      ? restored.sort(byNewest)
-      : mergeMemories(state.memories, restored);
-    saveMemories();
-    if (payload.holisticAnalysis && typeof payload.holisticAnalysis === "object") {
-      state.holisticAnalysis = payload.holisticAnalysis;
-      persistHolistic();
-    } else {
-      markAnalysisStale();
-    }
-    syncMemoriesToBridge({ silent: true });
-    state.protectionMode = null;
-    state.pendingRestoreFile = null;
-    state.view = "stream";
-    render();
-    notify(`已恢复 ${restored.length} 条记忆`);
+    applyRestoredPayload(JSON.parse(new TextDecoder().decode(plain)));
   } catch (error) {
     console.error(error);
     notify("无法恢复：密码错误或文件已损坏");
