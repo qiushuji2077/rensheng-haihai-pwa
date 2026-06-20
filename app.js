@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.5.3";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -455,12 +455,29 @@ function renderDock() {
   </nav>`;
 }
 
-function renderSearch() {
+function searchResults() {
   const keyword = state.search.trim().toLowerCase();
-  const results = state.memories
+  return state.memories
     .filter(m => state.scope === "all" || m.kind === state.scope)
     .filter(m => !keyword || [m.text, m.subject, m.topic].filter(Boolean).join(" ").toLowerCase().includes(keyword))
     .sort(byNewest);
+}
+
+// 只更新结果区，不整页重渲染：保住输入框焦点、光标和中文输入法的组字状态。
+function updateSearchResults() {
+  const keyword = state.search.trim().toLowerCase();
+  const results = searchResults();
+  const label = document.querySelector(".result-label");
+  if (label) label.textContent = keyword ? `找到 ${results.length} 条相关记忆` : `最近 ${results.length} 条`;
+  const list = document.querySelector(".result-list");
+  if (!list) return;
+  list.innerHTML = results.length ? results.map(renderMemoryCard).join("") : renderEmpty("没有找到相关记忆", "换个关键词，或切换分类试试。");
+  list.querySelectorAll("[data-memory]").forEach(el => el.addEventListener("click", () => openMemory(el.dataset.memory)));
+}
+
+function renderSearch() {
+  const keyword = state.search.trim().toLowerCase();
+  const results = searchResults();
   return `<section class="screen">
     ${topbar("搜索记忆", "stream")}
     <div class="content-pad">
@@ -754,7 +771,8 @@ function bindEvents() {
   document.querySelector("[data-overlay]")?.addEventListener("click", e => { if (e.target === e.currentTarget) closeModal(); });
 
   const search = document.querySelector("#search-input");
-  search?.addEventListener("input", e => { state.search = e.target.value; render(); document.querySelector("#search-input")?.focus(); });
+  search?.addEventListener("input", e => { state.search = e.target.value; if (e.isComposing) return; updateSearchResults(); });
+  search?.addEventListener("compositionend", e => { state.search = e.target.value; updateSearchResults(); });
   document.querySelectorAll("[data-scope]").forEach(el => el.addEventListener("click", () => { state.scope = el.dataset.scope; render(); }));
   document.querySelectorAll("[data-subject]").forEach(el => el.addEventListener("click", () => openFacet("subject", el.dataset.subject)));
   document.querySelectorAll("[data-topic]").forEach(el => el.addEventListener("click", () => openFacet("topic", el.dataset.topic)));
