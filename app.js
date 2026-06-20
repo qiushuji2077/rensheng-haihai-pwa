@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.5.4";
+const APP_VERSION = "1.5.5";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -505,6 +505,21 @@ function renderSearch() {
   </section>`;
 }
 
+function topicTally() {
+  return [...state.memories.reduce((map, m) => { const t = m.topic || "日常"; map.set(t, (map.get(t) || 0) + 1); return map; }, new Map())].sort((a, b) => b[1] - a[1]);
+}
+
+// 不靠问卷、靠观察：取出现最多的「有信息量」主题（排除兜底的「日常」，且需积累到一定条数）
+function dominantTopic() {
+  const top = topicTally().find(([t]) => t !== "日常");
+  return top && top[1] >= 3 ? { topic: top[0], count: top[1] } : null;
+}
+
+function focusLineHTML() {
+  const top = dominantTopic();
+  return top ? `<p class="focus-line">最近你记得最多的是 <strong>${escapeHTML(top.topic)}</strong> · ${top.count} 条</p>` : "";
+}
+
 function renderLenses() {
   const cards = Object.entries(kinds).map(([kind, meta]) => {
     const items = state.memories.filter(m => m.kind === kind);
@@ -519,7 +534,7 @@ function renderLenses() {
       ${items.length ? `<button class="lens-all" data-kind="${kind}">查看全部 ${items.length} 条 →</button>` : ""}
     </section>`;
   }).join("");
-  const topicCounts = [...state.memories.reduce((map, m) => { const t = m.topic || "日常"; map.set(t, (map.get(t) || 0) + 1); return map; }, new Map())].sort((a, b) => b[1] - a[1]);
+  const topicCounts = topicTally();
   const topicsBlock = topicCounts.length
     ? `<div class="section-label">主题</div><div class="topic-chips">${topicCounts.map(([t, c]) => `<button class="chip" data-topic="${escapeAttr(t)}">${escapeHTML(t)} ${c}</button>`).join("")}</div>`
     : "";
@@ -530,6 +545,7 @@ function renderLenses() {
     <div class="content-pad lens-overview">
       <p class="eyebrow">三种归档 · ARCHIVE</p>
       <h1 class="display-title">先分清，再整体理解</h1>
+      ${focusLineHTML()}
       ${cards}
       ${topicsBlock}
       <section class="md-card"><div class="md-head"><span class="md-mark">md</span>本地记录 · 离线也在写</div><pre class="md-preview">${escapeHTML(preview)}</pre><p>Markdown 方便阅读；加密备份才能完整恢复全部记忆与分析。</p><div class="md-actions"><button class="action-button" data-protect>加密备份</button><button class="action-button" data-export>导出 Markdown</button></div></section>
@@ -590,6 +606,7 @@ function renderSummary() {
     ${topbar("总结与方向", "stream")}
     <div class="content-pad summary">
       <p class="eyebrow">${analysis.source === "codex" ? "CODEX · 整体分析" : "本地归档 · 等待整体分析"}</p><h1 class="display-title">总结 与 方向</h1>
+      ${focusLineHTML()}
       <section class="direction-card">
         <div class="direction-label">${analysis.periodLabel || "当前记忆"}${stale ? " · 有新记录待更新" : ""}</div>
         <p class="direction-quote">「${escapeHTML(analysis.overview)}」</p>

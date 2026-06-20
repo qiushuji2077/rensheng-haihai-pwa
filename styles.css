@@ -282,6 +282,10 @@ button { cursor: pointer; }
 }
 .chip.active { color: white; background: var(--teal); font-weight: 600; }
 .result-label { margin: 0 0 12px; color: var(--ghost); font-size: 12px; }
+.focus-line { margin: -2px 0 16px; color: var(--ghost); font-size: 13px; }
+.focus-line strong { color: var(--teal); font-weight: 600; }
+.dark .focus-line { color: rgba(234,242,238,.62); }
+.dark .focus-line strong { color: var(--teal-light); }
 .result-list { display: grid; gap: 12px; }
 .empty {
   display: grid;
