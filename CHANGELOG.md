@@ -3,6 +3,24 @@
 每次改动都记录在这里：做了什么、为什么、影响到哪。最新的在最上面。
 （更早的历史见 git 提交记录。）
 
+## 1.5.6 — 2026-06-20
+
+**界面「Codex 分析」改为「Claude」+ 电脑桥默认用 Claude Opus 4.8**
+
+- 总结页/连接页所有面向用户的文案由 Codex 改为 Claude（如「CLAUDE · 整体分析」「用 Claude 更新整体分析」「连接电脑上的 Claude」等）。代码内部标识符（`codexConfig`、`data-codex-analyze`、`source==="codex"` 兜底判断等）保持不变，不影响逻辑。
+- 电脑桥启动脚本默认 `HAIHAI_ANALYZER=claude`、`HAIHAI_CLAUDE_MODEL=claude-opus-4-8`；可用环境变量改回 codex 或换模型。
+- 模型说明：当前最新 Opus 即 4.8（`claude-opus-4-8`，已实测可用）；"4.6"是 Sonnet 的版本号，不是 Opus。
+
+## 电脑桥 bridge — 2026-06-20（非 PWA 版本，仅本机生效）
+
+**整体分析引擎支持切换 Codex / Claude Code CLI**
+
+- `bridge/run-analysis.mjs` 新增 Claude 后端：设 `HAIHAI_ANALYZER=claude` 即用本机 `claude -p` 跑整体分析（默认仍是 `codex`，不影响现状）。可选 `HAIHAI_CLAUDE_MODEL` 指定模型。
+- Claude 无 `--output-schema` 约束解码，故把 JSON Schema 写进提示词强约束，并加「解析失败再修复一次」的兜底；实测中文 JSON 直接通过。
+- 修了一个会毁掉中文输出的隐患：子进程 stdout 用 `setEncoding("utf8")`，避免多字节字符跨 chunk 被切碎成乱码。
+- 安全沿用：空目录运行、禁用全部工具与 MCP、只读；记忆视为不可信输入。
+- 分析结果新增 `engine` 字段（codex/claude）；`source` 仍保持 `codex` 以兼容 App 端「来自电脑桥」的判断。
+
 ## 1.5.5 — 2026-06-20
 
 **自动高频主题（替代"关注点"问卷）+ 电脑桥提示词去个人化**
