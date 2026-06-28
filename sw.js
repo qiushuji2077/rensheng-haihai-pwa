@@ -1,14 +1,14 @@
-const CACHE = "rensheng-haihai-v18";
+const CACHE = "rensheng-haihai-v19";
 const ASSETS = [
   "./",
   "./index.html",
   "./styles.css?v=1.5.6",
   "./app.js?v=1.5.6",
-  "./manifest.webmanifest",
+  "./manifest.webmanifest?v=1.5.7",
   "./bridge.json",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/apple-touch-icon.png"
+  "./icons/icon-192.png?v=1.5.7",
+  "./icons/icon-512.png?v=1.5.7",
+  "./icons/apple-touch-icon.png?v=1.5.7"
 ];
 
 self.addEventListener("install", (event) => {
