@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.5.6";
+const APP_VERSION = "1.5.8";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -426,7 +426,7 @@ function render() {
 function renderStream() {
   const today = state.memories.filter(m => isToday(m.createdAt)).length;
   const groups = groupByDay(state.memories);
-  return `<section class="screen">
+  return `<section class="screen stream-screen">
     <header class="page-pad">
       <p class="eyebrow">记忆流 · MEMORY STREAM</p>
       <div class="date-line"><h1 class="display-title">${chineseDate(new Date())}</h1><span>${weekday(new Date())}</span></div>
@@ -602,22 +602,30 @@ function renderSummary() {
   const analysis = state.holisticAnalysis || buildLocalOverview();
   const connected = Boolean(state.codexConfig.token);
   const stale = Boolean(analysis.stale);
+  const modelLabel = analysisModelLabel(analysis);
   return `<section class="screen dark">
     ${topbar("总结与方向", "stream")}
     <div class="content-pad summary">
-      <p class="eyebrow">${analysis.source === "codex" ? "CLAUDE · 整体分析" : "本地归档 · 等待整体分析"}</p><h1 class="display-title">总结 与 方向</h1>
+      <p class="eyebrow">${analysis.source === "codex" ? `${escapeHTML(modelLabel)} · 整体分析` : "本地归档 · 等待整体分析"}</p><h1 class="display-title">总结 与 方向</h1>
       ${focusLineHTML()}
       <section class="direction-card">
         <div class="direction-label">${analysis.periodLabel || "当前记忆"}${stale ? " · 有新记录待更新" : ""}</div>
         <p class="direction-quote">「${escapeHTML(analysis.overview)}」</p>
-        <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 Claude 更新整体分析" : "连接 Claude 进行整体分析"}</button>
+        <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 GPT-5.5 更新整体分析" : "连接 GPT-5.5 进行整体分析"}</button>
       </section>
       ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article data-subject="${escapeAttr(person.name)}"><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
       ${renderSignals(analysis)}
       ${analysis.directions?.length ? `<div class="section-label">下一步方向</div><div class="direction-list">${analysis.directions.map(item => `<article><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.why)}</p><div>${escapeHTML(item.nextStep)}</div><span>${escapeHTML(item.horizon || "接下来")}</span></article>`).join("")}</div>` : ""}
-      <p class="privacy-note">${analysis.source === "codex" ? `由 Claude 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接电脑：记忆先加密同步到电脑本地；做整体分析时，会把记忆交给电脑上登录的 Claude（云端模型）处理" : "当前未连接 Claude，记忆只在这台设备本地保存与分析"}</p>
+      <p class="privacy-note">${analysis.source === "codex" ? `由 ${escapeHTML(modelLabel)} 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接电脑：记忆先加密同步到电脑本地；做整体分析时，会由电脑上登录的 Codex 调用 GPT-5.5 处理" : "当前未连接 GPT-5.5，记忆只在这台设备本地保存与分析"}</p>
     </div>
   </section>`;
+}
+
+function analysisModelLabel(analysis) {
+  if (analysis?.engine === "claude") return "Claude";
+  const model = typeof analysis?.model === "string" ? analysis.model.trim() : "";
+  if (!model || model.toLowerCase() === "gpt-5.5") return "GPT-5.5";
+  return model;
 }
 
 function renderDetail() {
@@ -709,8 +717,8 @@ function renderUrgentAlert() {
 function renderCodexConnection() {
   return `<div class="modal" data-overlay><section class="modal-panel install-sheet protection-sheet">
     <button class="icon-button" data-close style="margin-left:auto">✕</button>
-    <div class="protection-symbol codex-symbol">C</div>
-    <h2>连接电脑上的 Claude</h2>
+    <div class="protection-symbol codex-symbol">G</div>
+    <h2>连接电脑上的 GPT-5.5</h2>
     <p>在电脑启动“人生海海桥”后，从配对页复制连接码。桥接地址会自动发现，App 不会保存你的 AI 账号密码。</p>
     <label class="field-label">连接码<input id="codex-token" class="secure-field" type="password" autocomplete="off" value="${escapeAttr(state.codexConfig.token || "")}" placeholder="粘贴电脑生成的连接码" /></label>
     <label class="field-label">桥接地址 · 自动发现，通常不用填写<input id="codex-endpoint" class="secure-field" type="url" autocomplete="off" value="${escapeAttr(state.codexConfig.endpoint || "")}" placeholder="留空即可自动发现" /></label>
@@ -1381,7 +1389,7 @@ function buildLocalOverview() {
     directions.push({
       title: "继续留下自然、具体的片段",
       why: "记录数量还少，过早总结容易把偶然当成规律。",
-      nextStep: "保持原话即可；出现重复主题后，再交给电脑上的 Claude 做整体复盘。",
+      nextStep: "保持原话即可；出现重复主题后，再交给电脑上的 GPT-5.5 做整体复盘。",
       horizon: "先积累 1—2 周"
     });
   }
@@ -1446,7 +1454,7 @@ async function saveCodexConnection() {
     await syncMemoriesToBridge({ silent: false });
     state.codexMode = null;
     render();
-    notify("已连接电脑上的 Claude");
+    notify("已连接电脑上的 GPT-5.5");
     pullLatestAnalysis({ silent: true });
   } catch (error) {
     state.codexConfig = previous;
@@ -1479,7 +1487,7 @@ async function refreshHolisticAnalysis() {
     notify("整体分析已更新");
   } catch (error) {
     console.error(error);
-    notify("Claude 暂时没有完成分析，请确认电脑在线");
+    notify("GPT-5.5 暂时没有完成分析，请确认电脑在线");
   } finally {
     state.codexBusy = false;
     render();
