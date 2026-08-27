@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.7.1";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -822,7 +822,8 @@ function renderGoogleSetup() {
     <ol class="install-steps">
       <li>打开 <a href="https://console.cloud.google.com/auth/overview?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">OAuth 同意屏幕</a>，用户类型选外部，测试用户加上你的谷歌邮箱。</li>
       <li>再打开 <a href="https://console.cloud.google.com/auth/clients/create?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">创建 OAuth 客户端</a>，类型选「Web application」。</li>
-      <li>已授权的 JavaScript 来源和重定向 URI 填这两个：<code class="uri-chip">${escapeHTML(googleRedirectUri())}</code><code class="uri-chip">https://qiushuji2077.github.io/rensheng-haihai-pwa/</code></li>
+      <li>已授权的 <strong>JavaScript 来源</strong>只填域名，不要带后面的路径：${uriChips(["https://qiushuji2077.github.io", googleOrigin()])}</li>
+      <li>已授权的 <strong>重定向 URI</strong> 才填完整地址：${uriChips(["https://qiushuji2077.github.io/rensheng-haihai-pwa/", googleRedirectUri()])}</li>
     </ol>
     <label class="field-label">客户端 ID<input id="google-client-id" class="secure-field" type="text" autocomplete="off" value="${escapeAttr(googleClientId())}" placeholder="xxxx.apps.googleusercontent.com" /></label>
     <button class="wide-primary" data-save-google-client>保存并授权谷歌硬盘</button>
@@ -1288,11 +1289,23 @@ function googleClientId() {
   return (localStorage.getItem(GOOGLE_CLIENT_ID_KEY) || GOOGLE_CLIENT_ID_BUILTIN || "").trim();
 }
 
+function googleOrigin() {
+  return new URL(location.href).origin;
+}
+
 function googleRedirectUri() {
   const url = new URL(location.href);
   let path = url.pathname.replace(/index\.html$/i, "");
   if (!path.endsWith("/")) path += "/";
   return `${url.origin}${path}`;
+}
+
+function uniqueUris(...values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function uriChips(values) {
+  return uniqueUris(...values).map(value => `<code class="uri-chip">${escapeHTML(value)}</code>`).join("");
 }
 
 function googleAccessToken() {
