@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.7.2";
+const APP_VERSION = "1.7.3";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -17,10 +17,10 @@ const CLOUD_TARGETS = {
     id: "google",
     label: "谷歌硬盘",
     mark: "G",
-    hint: "一键直传",
+    hint: "分享存入",
     shareTitle: "人生海海备份 · 请选择谷歌硬盘",
     shareText: "请在分享菜单里点「Google Drive」或「谷歌硬盘」，建议存到名为「人生海海」的文件夹。",
-    notify: "已存入谷歌硬盘「人生海海」"
+    notify: "请在分享里选择谷歌硬盘"
   },
   tencent: {
     id: "tencent",
@@ -786,7 +786,7 @@ function renderProtection() {
       <label class="protection-action"><span>↑</span><div><strong>恢复备份</strong><small>从 .json 或 .haihai 文件恢复</small></div><input id="restore-file" type="file" hidden /></label>
     </div>
     <div class="protection-kicker">存到网盘 / 电脑</div>
-    <p class="protection-hint">谷歌硬盘授权一次后可直接写入「人生海海」文件夹。腾讯文档和夸克没有网页直传，仍走系统分享。电脑桥是本机同步的小入口。</p>
+    <p class="protection-hint">三个网盘都从主屏幕直接分享出去，不用切 Safari，也不用填谷歌客户端。手机请先装对应 App，分享菜单里才会出现。电脑桥是本机同步的小入口。</p>
     <div class="cloud-backup-row">
       ${Object.values(CLOUD_TARGETS).map(target => `<button class="protection-action cloud" data-backup-cloud="${target.id}" ${state.memories.length ? "" : "disabled"}><span>${escapeHTML(target.mark)}</span><strong>${escapeHTML(target.label)}</strong><small>${escapeHTML(target.hint)}</small></button>`).join("")}
       <button class="protection-action cloud" data-open-bridge><span>桥</span><strong>电脑桥</strong><small>${bridgeOn ? "已连接" : "本机同步"}</small></button>
@@ -1268,7 +1268,6 @@ async function createCloudBackup(targetId) {
   const target = CLOUD_TARGETS[targetId];
   if (!target) return;
   if (!state.memories.length) return notify("暂无记忆需要备份");
-  if (targetId === "google") return backupToGoogleDrive();
   const button = document.querySelector(`[data-backup-cloud="${targetId}"]`);
   if (button) button.disabled = true;
   try {
