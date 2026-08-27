@@ -1,10 +1,46 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.5.8";
+const APP_VERSION = "1.6.0";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
 const LAST_BACKUP_KEY = "rensheng-haihai.last-backup.v1";
+const LAST_AGENT_TASK_KEY = "rensheng-haihai.last-agent-task.v1";
+const GOOGLE_CLIENT_ID_KEY = "rensheng-haihai.google-client-id.v1";
+const GOOGLE_TOKEN_KEY = "rensheng-haihai.google-token.v1";
+const GOOGLE_PKCE_KEY = "rensheng-haihai.google-pkce.v1";
+const GOOGLE_PENDING_KEY = "rensheng-haihai.google-pending.v1";
+const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const GOOGLE_CLIENT_ID_BUILTIN = "";
+const CLOUD_TARGETS = {
+  google: {
+    id: "google",
+    label: "谷歌硬盘",
+    mark: "G",
+    hint: "一键直传",
+    shareTitle: "人生海海备份 · 请选择谷歌硬盘",
+    shareText: "请在分享菜单里点「Google Drive」或「谷歌硬盘」，建议存到名为「人生海海」的文件夹。",
+    notify: "已存入谷歌硬盘「人生海海」"
+  },
+  tencent: {
+    id: "tencent",
+    label: "腾讯文档",
+    mark: "腾",
+    hint: "分享存入",
+    shareTitle: "人生海海备份 · 请选择腾讯文档",
+    shareText: "请在分享菜单里点「腾讯文档」。若没有，可先发给微信文件传输助手，再转存。",
+    notify: "请在分享里选择腾讯文档"
+  },
+  quark: {
+    id: "quark",
+    label: "夸克云盘",
+    mark: "夸",
+    hint: "分享存入",
+    shareTitle: "人生海海备份 · 请选择夸克云盘",
+    shareText: "请在分享菜单里点「夸克」或「夸克网盘」，建议存到名为「人生海海」的文件夹。",
+    notify: "请在分享里选择夸克云盘"
+  }
+};
 const RESOLVED_SIGNALS_KEY = "rensheng-haihai.resolved-signals.v1";
 const BACKUP_FORMAT = "rensheng-haihai-encrypted-backup";
 const BACKUP_AAD = "rensheng-haihai-backup:v1";
@@ -611,12 +647,12 @@ function renderSummary() {
       <section class="direction-card">
         <div class="direction-label">${analysis.periodLabel || "当前记忆"}${stale ? " · 有新记录待更新" : ""}</div>
         <p class="direction-quote">「${escapeHTML(analysis.overview)}」</p>
-        <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 GPT-5.5 更新整体分析" : "连接 GPT-5.5 进行整体分析"}</button>
+        <button class="codex-refresh" data-codex-analyze ${state.memories.length ? "" : "disabled"}>${state.codexBusy ? "分析中…" : connected ? "用 GPT-5.5 更新整体分析" : "选择分析方式"}</button>
       </section>
       ${analysis.people?.length ? `<div class="section-label">人物线</div><div class="people-lines">${analysis.people.map(person => `<article data-subject="${escapeAttr(person.name)}"><div><strong>${escapeHTML(person.name)}</strong><span>${person.count} 条记忆</span></div><p>${escapeHTML(person.summary)}</p></article>`).join("")}</div>` : ""}
       ${renderSignals(analysis)}
       ${analysis.directions?.length ? `<div class="section-label">下一步方向</div><div class="direction-list">${analysis.directions.map(item => `<article><strong>${escapeHTML(item.title)}</strong><p>${escapeHTML(item.why)}</p><div>${escapeHTML(item.nextStep)}</div><span>${escapeHTML(item.horizon || "接下来")}</span></article>`).join("")}</div>` : ""}
-      <p class="privacy-note">${analysis.source === "codex" ? `由 ${escapeHTML(modelLabel)} 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>${connected ? "已连接电脑：记忆先加密同步到电脑本地；做整体分析时，会由电脑上登录的 Codex 调用 GPT-5.5 处理" : "当前未连接 GPT-5.5，记忆只在这台设备本地保存与分析"}</p>
+      <p class="privacy-note">${analysis.source === "codex" ? `由 ${escapeHTML(modelLabel)} 基于 ${analysis.memoryCount || state.memories.length} 条记忆整体生成 · ${formatAnalysisTime(analysis.generatedAt)}` : "单条只归档，不做过度解读"}<br/>分析入口在「记忆保护」：网盘周更是主路径，电脑桥是并列的小入口。</p>
     </div>
   </section>`;
 }
@@ -731,10 +767,12 @@ function renderCodexConnection() {
 function renderProtection() {
   if (state.protectionMode === "create") return renderCreateBackup();
   if (state.protectionMode === "restore") return renderRestoreBackup();
+  if (state.protectionMode === "google-setup") return renderGoogleSetup();
   const lastBackup = localStorage.getItem(LAST_BACKUP_KEY);
   const status = lastBackup
     ? `上次备份：${formatBackupDate(lastBackup)}`
     : state.memories.length ? "还没有创建过备份" : "暂无记忆需要备份";
+  const bridgeOn = Boolean(state.codexConfig.token);
   return `<div class="modal" data-overlay><section class="modal-panel install-sheet protection-sheet">
     <button class="icon-button" data-close style="margin-left:auto">✕</button>
     <div class="protection-symbol">${icons.shield}</div>
@@ -746,8 +784,34 @@ function renderProtection() {
       <button class="protection-action" data-backup-create ${state.memories.length ? "" : "disabled"}><span>🔒</span><div><strong>创建加密备份</strong><small>设密码 · 文件泄露也打不开</small></div></button>
       <label class="protection-action"><span>↑</span><div><strong>恢复备份</strong><small>从 .json 或 .haihai 文件恢复</small></div><input id="restore-file" type="file" hidden /></label>
     </div>
+    <div class="protection-kicker">存到网盘 / 电脑</div>
+    <p class="protection-hint">谷歌硬盘授权一次后可直接写入「人生海海」文件夹。腾讯文档和夸克没有网页直传，仍走系统分享。电脑桥是本机同步的小入口。</p>
+    <div class="cloud-backup-row">
+      ${Object.values(CLOUD_TARGETS).map(target => `<button class="protection-action cloud" data-backup-cloud="${target.id}" ${state.memories.length ? "" : "disabled"}><span>${escapeHTML(target.mark)}</span><strong>${escapeHTML(target.label)}</strong><small>${escapeHTML(target.hint)}</small></button>`).join("")}
+      <button class="protection-action cloud" data-open-bridge><span>桥</span><strong>电脑桥</strong><small>${bridgeOn ? "已连接" : "本机同步"}</small></button>
+    </div>
+    <div class="protection-kicker">定时交给 Agent</div>
+    <p class="protection-hint">周日 20:00 电脑从「人生海海」文件夹取最新备份做整体分析，不要求当时连着电脑桥。</p>
+    <div class="protection-actions">
+      <button class="protection-action primary" data-agent-schedule ${state.memories.length ? "" : "disabled"}><span>⏱</span><div><strong>一键生成周更任务</strong><small>${agentTaskStatus()}</small></div></button>
+    </div>
     <button class="plain-link" data-install>如何安装到主屏幕</button>
     <div class="version-line"><span>版本 ${APP_VERSION}</span><button data-check-update>检查更新</button></div>
+  </section></div>`;
+}
+
+function renderGoogleSetup() {
+  return `<div class="modal"><section class="modal-panel install-sheet protection-sheet">
+    <button class="icon-button" data-protect-home aria-label="返回">${icons.back}</button>
+    <h2>接通谷歌硬盘</h2>
+    <p>谷歌可以真正一键存进去。需要一次免费的网页客户端，授权后以后点一下就会写入「人生海海」文件夹。</p>
+    <ol class="install-steps">
+      <li>打开 <a href="https://console.cloud.google.com/auth/overview?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">OAuth 同意屏幕</a>，用户类型选外部，测试用户加上你的谷歌邮箱。</li>
+      <li>再打开 <a href="https://console.cloud.google.com/auth/clients/create?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">创建 OAuth 客户端</a>，类型选「Web application」。</li>
+      <li>已授权的 JavaScript 来源和重定向 URI 填这两个：<code class="uri-chip">${escapeHTML(googleRedirectUri())}</code><code class="uri-chip">https://qiushuji2077.github.io/rensheng-haihai-pwa/</code></li>
+    </ol>
+    <label class="field-label">客户端 ID<input id="google-client-id" class="secure-field" type="text" autocomplete="off" value="${escapeAttr(googleClientId())}" placeholder="xxxx.apps.googleusercontent.com" /></label>
+    <button class="wide-primary" data-save-google-client>保存并授权谷歌硬盘</button>
   </section></div>`;
 }
 
@@ -793,6 +857,10 @@ function bindEvents() {
   document.querySelectorAll("[data-protect]").forEach(el => el.addEventListener("click", () => { state.protectionMode = "home"; render(); }));
   document.querySelector("[data-protect-home]")?.addEventListener("click", () => { state.protectionMode = "home"; state.pendingRestoreFile = null; state.restoreKind = null; render(); });
   document.querySelector("[data-backup-quick]")?.addEventListener("click", createQuickBackup);
+  document.querySelectorAll("[data-backup-cloud]").forEach(el => el.addEventListener("click", () => createCloudBackup(el.dataset.backupCloud)));
+  document.querySelector("[data-open-bridge]")?.addEventListener("click", () => { state.protectionMode = null; state.codexMode = "connect"; render(); });
+  document.querySelector("[data-save-google-client]")?.addEventListener("click", saveGoogleClientAndAuth);
+  document.querySelector("[data-agent-schedule]")?.addEventListener("click", createAgentSchedule);
   document.querySelector("[data-backup-create]")?.addEventListener("click", () => { state.protectionMode = "create"; render(); setTimeout(() => document.querySelector("#backup-password")?.focus(), 80); });
   document.querySelector("#restore-file")?.addEventListener("change", async event => {
     const file = event.target.files?.[0];
@@ -839,7 +907,7 @@ function bindEvents() {
   document.querySelector("[data-confirm-delete]")?.addEventListener("click", confirmDeleteSelected);
   document.querySelector("[data-codex-analyze]")?.addEventListener("click", () => {
     if (!state.codexConfig.token) {
-      state.codexMode = "connect";
+      state.protectionMode = "home";
       render();
     } else {
       refreshHolisticAnalysis();
@@ -1022,20 +1090,66 @@ function backupPayload() {
   };
 }
 
+function makeBackupFile() {
+  return new File(
+    [JSON.stringify(backupPayload())],
+    `人生海海-备份-${isoDay(new Date())}.json`,
+    { type: "application/json" }
+  );
+}
+
+function agentTaskMarkdown() {
+  const day = isoDay(new Date());
+  return `# 人生海海 · Agent 周更分析任务
+
+导出时间：${day}
+记忆条数：${state.memories.length}
+
+这是整体分析的第二种方式。第一种是手机连接电脑桥、当场分析。
+这一种不要求当时连着：电脑每周日 20:00 读取网盘（或本机收件箱）里最新的 \`人生海海-备份-*.json\`，用同一套规则做整体分析。
+
+## 在这台电脑上接通定时任务
+
+双击项目里的「安装人生海海Agent周更.command」。之后每周日晚上会自动跑。
+
+也可手动执行：
+
+\`\`\`bash
+node bridge/analyze-from-cloud.mjs
+\`\`\`
+
+## 备份要放哪
+
+请把 \`人生海海-备份-*.json\` 存到网盘里名为「人生海海」的文件夹：
+
+- 谷歌硬盘 / Google Drive
+- 腾讯文档
+- 夸克云盘
+
+电脑安装对应同步盘后，任务会自动找到。加密 \`.haihai\` 备份 Agent 读不了。
+
+## Agent 指令（Cursor / Codex 定时任务也可直接用这段）
+
+读取最新的人生海海备份 JSON（格式 \`rensheng-haihai-data\`）。把其中 memories 交给项目 \`bridge/run-analysis.mjs\` 的同一套整体整理规则：只输出符合 \`bridge/analysis-schema.json\` 的 JSON，不要逐条点评，不要下医疗诊断。把结果写入同目录 \`人生海海-分析-${day}.json\`（完整备份 + holisticAnalysis），并写一份人读的 \`人生海海-周报-${day}.md\`。不要把记忆提交到 GitHub。
+`;
+}
+
+function agentTaskStatus() {
+  const last = localStorage.getItem(LAST_AGENT_TASK_KEY);
+  if (!last || Number.isNaN(Date.parse(last))) return "周日 20:00 从网盘取最新备份";
+  return `上次生成：${formatBackupDate(last)}`;
+}
+
 async function createQuickBackup() {
   if (!state.memories.length) return notify("暂无记忆需要备份");
   const button = document.querySelector("[data-backup-quick]");
   if (button) button.disabled = true;
   try {
-    const file = new File(
-      [JSON.stringify(backupPayload())],
-      `人生海海-备份-${isoDay(new Date())}.json`,
-      { type: "application/json" }
-    );
-    await saveBackupFile(file);
-    localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
-    state.protectionMode = "home";
-    render();
+    await saveBackupFile(makeBackupFile(), {
+      title: "人生海海备份",
+      text: "请存到「文件」或 iCloud Drive。"
+    });
+    markBackupDone();
     notify("快速备份已保存到 iCloud / 文件");
   } catch (error) {
     if (button) button.disabled = false;
@@ -1043,6 +1157,282 @@ async function createQuickBackup() {
     console.error(error);
     notify("备份失败，请稍后重试");
   }
+}
+
+async function createCloudBackup(targetId) {
+  const target = CLOUD_TARGETS[targetId];
+  if (!target) return;
+  if (!state.memories.length) return notify("暂无记忆需要备份");
+  if (targetId === "google") return backupToGoogleDrive();
+  const button = document.querySelector(`[data-backup-cloud="${targetId}"]`);
+  if (button) button.disabled = true;
+  try {
+    await saveBackupFile(makeBackupFile(), {
+      title: target.shareTitle,
+      text: target.shareText
+    });
+    markBackupDone();
+    notify(target.notify, 3200);
+  } catch (error) {
+    if (button) button.disabled = false;
+    if (error?.name === "AbortError") return;
+    console.error(error);
+    notify("备份失败，请稍后重试");
+  }
+}
+
+function googleClientId() {
+  return (localStorage.getItem(GOOGLE_CLIENT_ID_KEY) || GOOGLE_CLIENT_ID_BUILTIN || "").trim();
+}
+
+function googleRedirectUri() {
+  const url = new URL(location.href);
+  let path = url.pathname.replace(/index\.html$/i, "");
+  if (!path.endsWith("/")) path += "/";
+  return `${url.origin}${path}`;
+}
+
+function googleAccessToken() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GOOGLE_TOKEN_KEY) || "null");
+    if (!saved?.accessToken || !saved?.expiresAt) return "";
+    if (Date.now() > saved.expiresAt - 60000) return "";
+    return saved.accessToken;
+  } catch {
+    return "";
+  }
+}
+
+function storeGoogleToken(accessToken, expiresIn) {
+  const seconds = Number(expiresIn) || 3600;
+  safeSetItem(GOOGLE_TOKEN_KEY, JSON.stringify({
+    accessToken,
+    expiresAt: Date.now() + seconds * 1000
+  }));
+}
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function startGoogleAuth() {
+  const clientId = googleClientId();
+  if (!clientId) {
+    state.protectionMode = "google-setup";
+    render();
+    return;
+  }
+  const random = crypto.getRandomValues(new Uint8Array(32));
+  const verifier = bytesToBase64Url(random);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  const challenge = bytesToBase64Url(new Uint8Array(digest));
+  sessionStorage.setItem(GOOGLE_PKCE_KEY, verifier);
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: googleRedirectUri(),
+    response_type: "code",
+    scope: GOOGLE_DRIVE_SCOPE,
+    include_granted_scopes: "true",
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    state: "haihai-drive-backup",
+    prompt: googleAccessToken() ? "none" : "select_account"
+  });
+  location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+}
+
+async function saveGoogleClientAndAuth() {
+  const value = document.querySelector("#google-client-id")?.value.trim() || "";
+  if (!/\.apps\.googleusercontent\.com$/.test(value)) return notify("请粘贴完整的客户端 ID");
+  localStorage.setItem(GOOGLE_CLIENT_ID_KEY, value);
+  sessionStorage.setItem(GOOGLE_PENDING_KEY, "1");
+  await startGoogleAuth();
+}
+
+async function captureGoogleOAuthReturn() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("state") !== "haihai-drive-backup") return;
+  const code = params.get("code");
+  const error = params.get("error");
+  history.replaceState(null, "", `${location.pathname}${location.hash || ""}`);
+  if (error) {
+    notify("没有完成谷歌授权");
+    return;
+  }
+  if (!code) return;
+  try {
+    await exchangeGoogleCode(code);
+    state.protectionMode = "home";
+    render();
+    if (sessionStorage.getItem(GOOGLE_PENDING_KEY) === "1") {
+      sessionStorage.removeItem(GOOGLE_PENDING_KEY);
+      await uploadBackupToGoogleDrive();
+    } else {
+      notify("谷歌硬盘已接通，下次可一键直传");
+    }
+  } catch (error) {
+    console.error(error);
+    notify("谷歌授权没有完成，请重试");
+  }
+}
+
+async function exchangeGoogleCode(code) {
+  const verifier = sessionStorage.getItem(GOOGLE_PKCE_KEY);
+  sessionStorage.removeItem(GOOGLE_PKCE_KEY);
+  if (!verifier) throw new Error("missing pkce verifier");
+  const body = new URLSearchParams({
+    client_id: googleClientId(),
+    code,
+    code_verifier: verifier,
+    grant_type: "authorization_code",
+    redirect_uri: googleRedirectUri()
+  });
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.access_token) throw new Error(data?.error || "token exchange failed");
+  storeGoogleToken(data.access_token, data.expires_in);
+}
+
+async function backupToGoogleDrive() {
+  const button = document.querySelector("[data-backup-cloud=\"google\"]");
+  if (button) button.disabled = true;
+  try {
+    if (!googleClientId()) {
+      if (button) button.disabled = false;
+      state.protectionMode = "google-setup";
+      render();
+      return;
+    }
+    if (!googleAccessToken()) {
+      sessionStorage.setItem(GOOGLE_PENDING_KEY, "1");
+      await startGoogleAuth();
+      return;
+    }
+    await uploadBackupToGoogleDrive();
+  } catch (error) {
+    if (button) button.disabled = false;
+    console.error(error);
+    notify("还没存进谷歌硬盘，请再试一次");
+  }
+}
+
+async function uploadBackupToGoogleDrive() {
+  let token = googleAccessToken();
+  if (!token) {
+    sessionStorage.setItem(GOOGLE_PENDING_KEY, "1");
+    await startGoogleAuth();
+    return;
+  }
+  const file = makeBackupFile();
+  const folderId = await ensureGoogleFolder(token);
+  const metadata = {
+    name: file.name,
+    parents: [folderId],
+    mimeType: "application/json"
+  };
+  const body = new FormData();
+  body.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  body.append("file", file);
+  let response = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body
+  });
+  if (response.status === 401) {
+    localStorage.removeItem(GOOGLE_TOKEN_KEY);
+    sessionStorage.setItem(GOOGLE_PENDING_KEY, "1");
+    await startGoogleAuth();
+    return;
+  }
+  if (!response.ok) throw new Error(`drive ${response.status}`);
+  markBackupDone();
+  notify("已存入谷歌硬盘「人生海海」文件夹");
+}
+
+async function ensureGoogleFolder(token) {
+  const query = "name='人生海海' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+  const search = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (search.status === 401) throw new Error("unauthorized");
+  const found = await search.json().catch(() => null);
+  if (found?.files?.[0]?.id) return found.files[0].id;
+  const create = await fetch("https://www.googleapis.com/drive/v3/files?fields=id", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: "人生海海",
+      mimeType: "application/vnd.google-apps.folder"
+    })
+  });
+  const folder = await create.json().catch(() => null);
+  if (!create.ok || !folder?.id) throw new Error("folder create failed");
+  return folder.id;
+}
+
+async function createAgentSchedule() {
+  if (!state.memories.length) return notify("暂无记忆可生成任务");
+  const button = document.querySelector("[data-agent-schedule]");
+  if (button) button.disabled = true;
+  const backup = makeBackupFile();
+  const task = new File(
+    [agentTaskMarkdown()],
+    "人生海海-Agent周更.md",
+    { type: "text/markdown;charset=utf-8" }
+  );
+  let installed = false;
+  try {
+    if (state.codexConfig.token) {
+      const result = await bridgeFetch("/agent-schedule", {
+        method: "POST",
+        body: JSON.stringify({
+          memories: state.memories,
+          clientUpdatedAt: new Date().toISOString()
+        }),
+        timeout: 20000
+      });
+      installed = Boolean(result?.ok);
+    }
+  } catch (error) {
+    console.warn("电脑桥未能安装周更任务", error);
+  }
+  try {
+    await saveBackupFile([backup, task], {
+      title: "人生海海 · Agent 周更任务",
+      text: "请把备份存到谷歌硬盘 / 腾讯文档 / 夸克云盘里名为「人生海海」的文件夹。电脑上再双击「安装人生海海Agent周更.command」。"
+    });
+    localStorage.setItem(LAST_AGENT_TASK_KEY, new Date().toISOString());
+    markBackupDone();
+    notify(installed
+      ? "电脑已接上周日 20:00 任务；请再把备份存进网盘"
+      : "任务包已导出；请在电脑上双击安装周更任务", 3600);
+  } catch (error) {
+    if (button) button.disabled = false;
+    if (error?.name === "AbortError") {
+      if (installed) {
+        localStorage.setItem(LAST_AGENT_TASK_KEY, new Date().toISOString());
+        state.protectionMode = "home";
+        render();
+        notify("电脑已接上周日 20:00 任务", 2800);
+      }
+      return;
+    }
+    console.error(error);
+    notify(installed ? "电脑任务已装上，备份分享失败" : "生成任务失败，请稍后重试");
+  }
+}
+
+function markBackupDone() {
+  localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString());
+  state.protectionMode = "home";
+  render();
 }
 
 async function createEncryptedBackup() {
@@ -1189,21 +1579,41 @@ async function deriveBackupKey(password, salt, usages, iterations = BACKUP_ITERA
   );
 }
 
-async function saveBackupFile(file) {
-  if (navigator.share && navigator.canShare?.({ files: [file] })) {
+async function saveBackupFile(fileOrFiles, meta = {}) {
+  const files = Array.isArray(fileOrFiles) ? fileOrFiles : [fileOrFiles];
+  const title = meta.title || "人生海海备份";
+  const text = meta.text || "";
+  if (navigator.share && navigator.canShare?.({ files })) {
     try {
-      await navigator.share({ title: "人生海海加密备份", files: [file] });
+      await navigator.share({ title, text, files });
       return;
     } catch (error) {
       if (error?.name === "AbortError") throw error;
     }
   }
-  const url = URL.createObjectURL(file);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = file.name;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (files.length > 1 && navigator.share && navigator.canShare?.({ files: [files[0]] })) {
+    try {
+      await navigator.share({ title, text, files: [files[0]] });
+      downloadFiles(files.slice(1));
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+    }
+  }
+  downloadFiles(files);
+}
+
+function downloadFiles(files) {
+  files.forEach((file, index) => {
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    setTimeout(() => {
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, index * 250);
+  });
 }
 
 function validateBackupEnvelope(envelope) {
@@ -1655,7 +2065,7 @@ function chineseDate(date) {
 }
 function escapeHTML(value="") { return String(value).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" })[c]); }
 function escapeAttr(value="") { return escapeHTML(value).replace(/`/g, "&#96;"); }
-function notify(message) { toast.textContent = message; toast.classList.add("show"); clearTimeout(notify.timer); notify.timer = setTimeout(() => toast.classList.remove("show"), 1800); }
+function notify(message, duration = 1800) { toast.textContent = message; toast.classList.add("show"); clearTimeout(notify.timer); notify.timer = setTimeout(() => toast.classList.remove("show"), duration); }
 
 if ("serviceWorker" in navigator) {
   let refreshing = false;
@@ -1681,5 +2091,6 @@ if ("serviceWorker" in navigator) {
   });
 }
 render();
+captureGoogleOAuthReturn();
 hydrateFromDurableStore();
 hydrateCodexState();

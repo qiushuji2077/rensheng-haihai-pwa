@@ -565,6 +565,8 @@ button { cursor: pointer; }
 .install-sheet p { color: var(--body); font-size: 14px; line-height: 1.7; }
 .install-steps { margin: 20px 0; padding: 0; list-style: none; counter-reset: steps; }
 .install-steps li { counter-increment: steps; display: flex; gap: 12px; margin-bottom: 14px; color: var(--body); line-height: 1.5; }
+.install-steps a { color: var(--teal); }
+.install-steps code { font-size: 11px; }
 .install-steps li::before { content: counter(steps); display: grid; place-items: center; flex: 0 0 27px; height: 27px; border-radius: 50%; color: white; background: var(--teal); font-size: 12px; font-weight: 700; }
 .protection-sheet { max-height: calc(100dvh - env(safe-area-inset-top) - 10px); overflow-y: auto; }
 .protection-symbol {
@@ -626,6 +628,51 @@ button { cursor: pointer; }
 .protection-action strong, .protection-action small { display: block; }
 .protection-action strong { font-size: 14px; }
 .protection-action small { margin-top: 3px; color: var(--ghost); font-size: 11.5px; }
+.protection-kicker {
+  margin: 18px 0 6px;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.protection-hint {
+  margin: 0 0 10px !important;
+  color: var(--ghost) !important;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+}
+.cloud-backup-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.protection-action.cloud {
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-height: 82px;
+  padding: 10px 6px;
+  text-align: center;
+}
+.protection-action.cloud > span {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.protection-action.cloud strong { font-size: 12.5px; }
+.protection-action.cloud small { margin-top: 0; font-size: 10.5px; }
+.uri-chip {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: 11px;
+  word-break: break-all;
+}
 .plain-link {
   display: block;
   margin: 17px auto 0;
