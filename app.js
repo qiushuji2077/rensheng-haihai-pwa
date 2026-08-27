@@ -1,6 +1,6 @@
 const STORAGE_KEY = "rensheng-haihai.memories.v1";
 const VIEW_KEY = "rensheng-haihai.view.v1";
-const APP_VERSION = "1.7.1";
+const APP_VERSION = "1.7.2";
 const ARCHIVE_VERSION = 2;
 const HOLISTIC_ANALYSIS_KEY = "rensheng-haihai.holistic-analysis.v1";
 const CODEX_CONFIG_KEY = "rensheng-haihai.codex-config.v1";
@@ -820,10 +820,11 @@ function renderGoogleSetup() {
     <h2>接通谷歌硬盘</h2>
     <p>谷歌可以真正一键存进去。需要一次免费的网页客户端，授权后以后点一下就会写入「人生海海」文件夹。</p>
     <ol class="install-steps">
-      <li>打开 <a href="https://console.cloud.google.com/auth/overview?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">OAuth 同意屏幕</a>，用户类型选外部，测试用户加上你的谷歌邮箱。</li>
-      <li>再打开 <a href="https://console.cloud.google.com/auth/clients/create?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">创建 OAuth 客户端</a>，类型选「Web application」。</li>
-      <li>已授权的 <strong>JavaScript 来源</strong>只填域名，不要带后面的路径：${uriChips(["https://qiushuji2077.github.io", googleOrigin()])}</li>
-      <li>已授权的 <strong>重定向 URI</strong> 才填完整地址：${uriChips(["https://qiushuji2077.github.io/rensheng-haihai-pwa/", googleRedirectUri()])}</li>
+      <li>打开 <a href="https://console.cloud.google.com/auth/overview?project=project-b992bffc-e08f-4b66-ac9" target="_blank" rel="noopener">Google Auth Platform</a>。品牌信息里应用名填「人生海海」，邮箱选你的谷歌账号并保存。</li>
+      <li>受众选外部、测试；测试用户必须加上你正在登录的那个谷歌邮箱。</li>
+      <li>数据访问里添加范围：<code class="uri-chip">https://www.googleapis.com/auth/drive.file</code>（只允许本应用创建和读写它自己存进硬盘的文件）。漏加这一步，授权页就会显示「禁止访问 / 此应用的请求无效」。</li>
+      <li>客户端选 Web 应用。JavaScript 来源只填域名：${uriChips(["https://qiushuji2077.github.io", googleOrigin()])} 重定向 URI 填完整地址：${uriChips(["https://qiushuji2077.github.io/rensheng-haihai-pwa/", googleRedirectUri()])}</li>
+      <li>第一次授权请用 Safari 打开本网页，不要从主屏幕图标点。谷歌会拦截主屏幕里的内嵌页面。</li>
     </ol>
     <label class="field-label">客户端 ID<input id="google-client-id" class="secure-field" type="text" autocomplete="off" value="${escapeAttr(googleClientId())}" placeholder="xxxx.apps.googleusercontent.com" /></label>
     <button class="wide-primary" data-save-google-client>保存并授权谷歌硬盘</button>
@@ -1286,7 +1287,33 @@ async function createCloudBackup(targetId) {
 }
 
 function googleClientId() {
-  return (localStorage.getItem(GOOGLE_CLIENT_ID_KEY) || GOOGLE_CLIENT_ID_BUILTIN || "").trim();
+  return (localStorage.getItem(GOOGLE_CLIENT_ID_KEY) || GOOGLE_CLIENT_ID_BUILTIN || "").replace(/\s+/g, "");
+}
+
+function isStandaloneApp() {
+  return Boolean(window.navigator.standalone) || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+function loadGoogleIdentity() {
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector("script[src='https://accounts.google.com/gsi/client']");
+    const ready = () => {
+      if (window.google?.accounts?.oauth2) resolve();
+      else reject(new Error("gis missing"));
+    };
+    if (existing) {
+      existing.addEventListener("load", ready, { once: true });
+      setTimeout(ready, 1200);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = ready;
+    script.onerror = () => reject(new Error("gis blocked"));
+    document.head.appendChild(script);
+  });
 }
 
 function googleOrigin() {
@@ -1338,27 +1365,39 @@ async function startGoogleAuth() {
     render();
     return;
   }
-  const random = crypto.getRandomValues(new Uint8Array(32));
-  const verifier = bytesToBase64Url(random);
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
-  const challenge = bytesToBase64Url(new Uint8Array(digest));
-  sessionStorage.setItem(GOOGLE_PKCE_KEY, verifier);
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: googleRedirectUri(),
-    response_type: "code",
-    scope: GOOGLE_DRIVE_SCOPE,
-    include_granted_scopes: "true",
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state: "haihai-drive-backup",
-    prompt: googleAccessToken() ? "none" : "select_account"
-  });
-  location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+  if (isStandaloneApp()) {
+    notify("请用 Safari 打开本网页再授权谷歌硬盘，主屏幕里会被拦截", 4200);
+    state.protectionMode = "google-setup";
+    render();
+    return;
+  }
+  try {
+    await loadGoogleIdentity();
+    sessionStorage.setItem(GOOGLE_PENDING_KEY, "1");
+    const client = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: GOOGLE_DRIVE_SCOPE,
+      ux_mode: "redirect",
+      redirect_uri: googleRedirectUri(),
+      state: "haihai-drive-backup",
+      callback: async response => {
+        if (response?.error || !response?.access_token) {
+          notify("谷歌没有授权成功");
+          return;
+        }
+        storeGoogleToken(response.access_token, response.expires_in);
+        await uploadBackupToGoogleDrive();
+      }
+    });
+    client.requestAccessToken({ prompt: "consent" });
+  } catch (error) {
+    console.error(error);
+    notify("谷歌登录组件没加载到，请用 Safari 打开后再试", 3600);
+  }
 }
 
 async function saveGoogleClientAndAuth() {
-  const value = document.querySelector("#google-client-id")?.value.trim() || "";
+  const value = (document.querySelector("#google-client-id")?.value || "").replace(/\s+/g, "");
   if (!/\.apps\.googleusercontent\.com$/.test(value)) return notify("请粘贴完整的客户端 ID");
   localStorage.setItem(GOOGLE_CLIENT_ID_KEY, value);
   sessionStorage.setItem(GOOGLE_PENDING_KEY, "1");
@@ -1366,15 +1405,32 @@ async function saveGoogleClientAndAuth() {
 }
 
 async function captureGoogleOAuthReturn() {
-  const params = new URLSearchParams(location.search);
-  if (params.get("state") !== "haihai-drive-backup") return;
-  const code = params.get("code");
-  const error = params.get("error");
-  history.replaceState(null, "", `${location.pathname}${location.hash || ""}`);
-  if (error) {
-    notify("没有完成谷歌授权");
+  const search = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const token = hash.get("access_token") || search.get("access_token");
+  const oauthState = hash.get("state") || search.get("state");
+  const oauthError = search.get("error") || hash.get("error");
+  const code = search.get("code");
+  if (oauthError && (oauthState === "haihai-drive-backup" || token || code)) {
+    history.replaceState(null, "", `${location.pathname}`);
+    notify("谷歌没有授权成功，请用 Safari 打开网页再试");
     return;
   }
+  if (token && (oauthState === "haihai-drive-backup" || sessionStorage.getItem(GOOGLE_PENDING_KEY) === "1")) {
+    storeGoogleToken(token, hash.get("expires_in") || search.get("expires_in"));
+    history.replaceState(null, "", `${location.pathname}`);
+    state.protectionMode = "home";
+    render();
+    if (sessionStorage.getItem(GOOGLE_PENDING_KEY) === "1") {
+      sessionStorage.removeItem(GOOGLE_PENDING_KEY);
+      await uploadBackupToGoogleDrive();
+    } else {
+      notify("谷歌硬盘已接通，下次可一键直传");
+    }
+    return;
+  }
+  if (oauthState !== "haihai-drive-backup") return;
+  history.replaceState(null, "", `${location.pathname}${location.hash || ""}`);
   if (!code) return;
   try {
     await exchangeGoogleCode(code);
